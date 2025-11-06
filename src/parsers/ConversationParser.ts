@@ -161,25 +161,30 @@ export class ConversationParser {
     const projectDirName = pathToProjectFolderName(projectPath);
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 
-    // Try current naming convention first
-    let conversationDir = join(homeDir, ".claude", "projects", projectDirName);
+    // Check both modern and legacy naming conventions
+    const modernDir = join(homeDir, ".claude", "projects", projectDirName);
+    const legacyDirName = projectDirName.replace(/\./g, '-');
+    const legacyDir = join(homeDir, ".claude", "projects", legacyDirName);
 
-    // If not found, try legacy naming (dots replaced with dashes)
-    if (!existsSync(conversationDir)) {
-      const legacyDirName = projectDirName.replace(/\./g, '-');
-      const legacyDir = join(homeDir, ".claude", "projects", legacyDirName);
+    // Collect directories that exist
+    const dirsToCheck: string[] = [];
 
-      if (existsSync(legacyDir)) {
-        console.log(`Using legacy folder naming: ${legacyDirName}`);
-        conversationDir = legacyDir;
-      }
+    if (existsSync(modernDir)) {
+      dirsToCheck.push(modernDir);
+      console.log(`Found modern naming: ${projectDirName}`);
     }
 
-    console.log(`Looking in: ${conversationDir}`);
+    if (legacyDirName !== projectDirName && existsSync(legacyDir)) {
+      dirsToCheck.push(legacyDir);
+      console.log(`Found legacy naming: ${legacyDirName}`);
+    }
 
-    // Check if directory exists
-    if (!existsSync(conversationDir)) {
-      console.warn(`⚠️ Conversation directory not found: ${conversationDir}`);
+    if (dirsToCheck.length === 0) {
+      console.warn(`⚠️ No conversation directories found`);
+      console.warn(`  Checked: ${modernDir}`);
+      if (legacyDirName !== projectDirName) {
+        console.warn(`  Checked: ${legacyDir}`);
+      }
       return {
         conversations: [],
         messages: [],
@@ -190,17 +195,30 @@ export class ConversationParser {
       };
     }
 
-    // Read all .jsonl files, optionally filtering by session_id
-    let files = readdirSync(conversationDir).filter((f) =>
-      f.endsWith(".jsonl")
-    );
+    console.log(`Looking in ${dirsToCheck.length} director(ies): ${dirsToCheck.join(", ")}`);
+
+    // Collect all .jsonl files from all directories
+    const fileMap = new Map<string, string>(); // filename -> full path
+
+    for (const dir of dirsToCheck) {
+      const dirFiles = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+      for (const file of dirFiles) {
+        const fullPath = join(dir, file);
+        // If file already exists in map, keep the one from the first directory (modern takes precedence)
+        if (!fileMap.has(file)) {
+          fileMap.set(file, fullPath);
+        }
+      }
+    }
+
+    let files = Array.from(fileMap.keys());
 
     // If session_id provided, filter to only that session file
     if (sessionId) {
       files = files.filter((f) => f === `${sessionId}.jsonl`);
       if (files.length === 0) {
         console.warn(`⚠️ Session file not found: ${sessionId}.jsonl`);
-        console.warn(`Available sessions: ${readdirSync(conversationDir).filter((f) => f.endsWith(".jsonl")).join(", ")}`);
+        console.warn(`Available sessions: ${Array.from(fileMap.keys()).join(", ")}`);
       }
     }
 
@@ -217,8 +235,10 @@ export class ConversationParser {
     };
 
     for (const file of files) {
-      const filePath = join(conversationDir, file);
-      this.parseFile(filePath, result, projectPath);
+      const filePath = fileMap.get(file);
+      if (filePath) {
+        this.parseFile(filePath, result, projectPath);
+      }
     }
 
     console.log(
