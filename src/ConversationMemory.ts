@@ -1,5 +1,17 @@
 /**
- * Main Orchestrator - Coordinates all components
+ * Main Orchestrator - Coordinates all components for conversation memory indexing and retrieval.
+ *
+ * ConversationMemory is the primary interface for the conversation-memory-mcp system.
+ * It orchestrates parsing, storage, extraction, and search of Claude Code conversation history.
+ *
+ * @example
+ * ```typescript
+ * const memory = new ConversationMemory();
+ * await memory.indexConversations({
+ *   projectPath: '/path/to/project',
+ *   enableGitIntegration: true
+ * });
+ * ```
  */
 
 import { getSQLiteManager, SQLiteManager } from "./storage/SQLiteManager.js";
@@ -11,15 +23,56 @@ import { GitIntegrator } from "./parsers/GitIntegrator.js";
 import { RequirementsExtractor } from "./parsers/RequirementsExtractor.js";
 import { SemanticSearch } from "./search/SemanticSearch.js";
 
+/**
+ * Configuration options for indexing conversations.
+ */
 export interface IndexOptions {
+  /** Absolute path to the project directory to index */
   projectPath: string;
+
+  /** Optional: Index only a specific session ID instead of all sessions */
   sessionId?: string;
+
+  /**
+   * Whether to include thinking blocks in the index.
+   * Thinking blocks can be large and are excluded by default.
+   * @default false
+   */
   includeThinking?: boolean;
+
+  /**
+   * Enable git integration to link commits to conversations.
+   * Requires the project to be a git repository.
+   * @default true
+   */
   enableGitIntegration?: boolean;
+
+  /**
+   * Exclude MCP tool conversations from indexing.
+   * - `false`: Index all conversations (default)
+   * - `'self-only'`: Exclude only conversation-memory MCP conversations (prevents self-referential loops)
+   * - `'all-mcp'` or `true`: Exclude all MCP tool conversations
+   * @default false
+   */
   excludeMcpConversations?: boolean | 'self-only' | 'all-mcp';
+
+  /**
+   * List of specific MCP server names to exclude.
+   * More granular than `excludeMcpConversations`.
+   * @example ['conversation-memory', 'code-graph-rag']
+   */
   excludeMcpServers?: string[];
 }
 
+/**
+ * Main orchestrator for conversation memory operations.
+ *
+ * Coordinates parsing, storage, extraction, and search across:
+ * - Conversation parsing from JSONL files
+ * - Decision, mistake, and requirement extraction
+ * - Git commit integration
+ * - Semantic search with embeddings
+ */
 export class ConversationMemory {
   private sqliteManager: SQLiteManager;
   private storage: ConversationStorage;
@@ -40,7 +93,39 @@ export class ConversationMemory {
   }
 
   /**
-   * Index conversations for a project
+   * Index conversations for a project.
+   *
+   * This is the main entry point for processing conversation history.
+   * It performs the following operations:
+   * 1. Parse conversation JSONL files from the project
+   * 2. Store conversations, messages, and tool interactions
+   * 3. Extract decisions, mistakes, and requirements
+   * 4. Link git commits (if enabled)
+   * 5. Generate semantic embeddings for search
+   *
+   * @param options - Configuration options for indexing
+   * @returns Result object containing:
+   * - `embeddings_generated`: Whether embeddings were successfully generated
+   * - `embedding_error`: Error message if embedding generation failed
+   * - `indexed_folders`: List of folders that were indexed
+   * - `database_path`: Path to the SQLite database
+   *
+   * @throws {Error} If project path doesn't exist or conversation files can't be parsed
+   *
+   * @example
+   * ```typescript
+   * const result = await memory.indexConversations({
+   *   projectPath: '/Users/me/my-project',
+   *   enableGitIntegration: true,
+   *   excludeMcpConversations: 'self-only'
+   * });
+   *
+   * if (result.embeddings_generated) {
+   *   console.log('Indexed folders:', result.indexed_folders);
+   * } else {
+   *   console.warn('Embeddings failed:', result.embedding_error);
+   * }
+   * ```
    */
   async indexConversations(options: IndexOptions): Promise<{
     embeddings_generated: boolean;
@@ -158,50 +243,111 @@ export class ConversationMemory {
   }
 
   /**
-   * Search conversations
+   * Search conversations using natural language query.
+   *
+   * Uses semantic search with embeddings if available, otherwise falls back to full-text search.
+   *
+   * @param query - Natural language search query
+   * @param limit - Maximum number of results to return (default: 10)
+   * @returns Array of search results with messages, conversations, and similarity scores
+   *
+   * @example
+   * ```typescript
+   * const results = await memory.search('authentication bug fix', 5);
+   * results.forEach(r => {
+   *   console.log(`${r.similarity}: ${r.snippet}`);
+   * });
+   * ```
    */
   async search(query: string, limit: number = 10) {
     return this.semanticSearch.searchConversations(query, limit);
   }
 
   /**
-   * Search decisions
+   * Search for decisions using natural language query.
+   *
+   * Searches through extracted decisions to find relevant architectural choices and technical decisions.
+   *
+   * @param query - Natural language search query
+   * @param limit - Maximum number of results to return (default: 10)
+   * @returns Array of decision search results with similarity scores
+   *
+   * @example
+   * ```typescript
+   * const decisions = await memory.searchDecisions('database choice', 3);
+   * decisions.forEach(d => {
+   *   console.log(`Decision: ${d.decision.decision_text}`);
+   *   console.log(`Rationale: ${d.decision.rationale}`);
+   * });
+   * ```
    */
   async searchDecisions(query: string, limit: number = 10) {
     return this.semanticSearch.searchDecisions(query, limit);
   }
 
   /**
-   * Get file timeline
+   * Get the timeline of changes for a specific file.
+   *
+   * Returns all edits, commits, and related conversations for a file across its history.
+   *
+   * @param filePath - Path to the file (relative to project root)
+   * @returns Timeline of file changes with conversations and commits
+   *
+   * @example
+   * ```typescript
+   * const timeline = memory.getFileTimeline('src/index.ts');
+   * console.log(`${timeline.length} changes to this file`);
+   * ```
    */
   getFileTimeline(filePath: string) {
     return this.storage.getFileTimeline(filePath);
   }
 
   /**
-   * Get statistics
+   * Get statistics about the indexed conversation data.
+   *
+   * @returns Object containing counts for conversations, messages, decisions, mistakes, and commits
+   *
+   * @example
+   * ```typescript
+   * const stats = memory.getStats();
+   * console.log(`Indexed ${stats.conversations.count} conversations`);
+   * console.log(`Extracted ${stats.decisions.count} decisions`);
+   * ```
    */
   getStats() {
     return this.storage.getStats();
   }
 
   /**
-   * Get storage instance
+   * Get the underlying storage instance for direct database access.
+   *
+   * Use with caution - prefer using the high-level methods when possible.
+   *
+   * @returns ConversationStorage instance
+   * @internal
    */
   getStorage() {
     return this.storage;
   }
 
   /**
-   * Get semantic search instance
+   * Get the semantic search instance for advanced search operations.
+   *
+   * @returns SemanticSearch instance
+   * @internal
    */
   getSemanticSearch() {
     return this.semanticSearch;
   }
 
   /**
-   * Filter MCP conversations from parse results
-   * Strategy: Filter at MESSAGE level, not conversation level
+   * Filter MCP conversations from parse results.
+   *
+   * Implements the exclusion logic for MCP tool conversations to prevent
+   * self-referential loops and reduce noise in the index.
+   *
+   * Strategy: Filter at MESSAGE level, not conversation level.
    * - Keep all conversations
    * - Exclude only messages that invoke specified MCP tools and their responses
    */

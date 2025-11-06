@@ -1,5 +1,26 @@
 /**
- * MCP Tool Handlers - Implementation of all 13 tools (including migration)
+ * MCP Tool Handlers - Implementation of all 13 tools for the conversation-memory MCP server.
+ *
+ * This class provides the implementation for all MCP (Model Context Protocol) tools
+ * that allow Claude to interact with conversation history and memory.
+ *
+ * Tools are organized into categories:
+ * - Indexing: index_conversations
+ * - Search: search_conversations, searchDecisions, search_mistakes
+ * - File Context: check_before_modify, get_file_evolution
+ * - History: get_tool_history, link_commits_to_conversations
+ * - Discovery: find_similar_sessions, get_requirements
+ * - Recall: recall_and_apply
+ * - Documentation: generate_documentation
+ * - Migration: discover_old_conversations, migrate_project
+ *
+ * @example
+ * ```typescript
+ * const handlers = new ToolHandlers(memory, db, '/path/to/projects');
+ * const result = await handlers.indexConversations({
+ *   project_path: '/Users/me/my-project'
+ * });
+ * ```
  */
 
 import { ConversationMemory } from "../ConversationMemory.js";
@@ -12,15 +33,58 @@ import { pathToProjectFolderName } from "../utils/sanitization.js";
 import { readdirSync } from "fs";
 import { join } from "path";
 
+/**
+ * Tool handlers for the conversation-memory MCP server.
+ *
+ * Provides methods for indexing, searching, and managing conversation history.
+ */
 export class ToolHandlers {
   private migration: ProjectMigration;
 
+  /**
+   * Create a new ToolHandlers instance.
+   *
+   * @param memory - ConversationMemory instance for core operations
+   * @param db - SQLiteManager for database access
+   * @param projectsDir - Optional directory for storing project data
+   */
   constructor(private memory: ConversationMemory, private db: SQLiteManager, projectsDir?: string) {
     this.migration = new ProjectMigration(db, projectsDir);
   }
 
   /**
-   * Tool 1: index_conversations
+   * Index conversation history for a project.
+   *
+   * Parses conversation files from Claude Code's conversation history, extracts
+   * decisions, mistakes, and requirements, links git commits, and generates
+   * semantic embeddings for search.
+   *
+   * @param args - Indexing arguments:
+   * - `project_path`: Path to the project (defaults to cwd)
+   * - `session_id`: Optional specific session to index
+   * - `include_thinking`: Include thinking blocks (default: false)
+   * - `enable_git`: Enable git integration (default: true)
+   * - `exclude_mcp_conversations`: Exclude MCP tool conversations (default: 'self-only')
+   * - `exclude_mcp_servers`: List of specific MCP servers to exclude
+   *
+   * @returns Result containing:
+   * - `success`: Whether indexing succeeded
+   * - `stats`: Counts of conversations, messages, decisions, etc.
+   * - `indexed_folders`: List of folders that were indexed
+   * - `database_path`: Path to the SQLite database
+   * - `embeddings_generated`: Whether embeddings were created
+   * - `embedding_error`: Error message if embeddings failed
+   * - `message`: Human-readable status message
+   *
+   * @example
+   * ```typescript
+   * const result = await handlers.indexConversations({
+   *   project_path: '/Users/me/my-project',
+   *   enable_git: true,
+   *   exclude_mcp_conversations: 'self-only'
+   * });
+   * console.log(result.message); // "Indexed 5 conversation(s) with 245 messages..."
+   * ```
    */
   async indexConversations(args: Record<string, unknown>): Promise<Types.IndexConversationsResponse> {
     const typedArgs = args as Types.IndexConversationsArgs;
@@ -76,7 +140,39 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 2: search_conversations
+   * Search conversation history using natural language queries.
+   *
+   * Uses semantic search with embeddings if available, otherwise falls back
+   * to full-text search. Returns relevant messages with context and similarity scores.
+   *
+   * @param args - Search arguments:
+   * - `query`: Natural language search query (required)
+   * - `limit`: Maximum number of results (default: 10)
+   * - `date_range`: Optional [start_timestamp, end_timestamp] filter
+   *
+   * @returns Search results containing:
+   * - `query`: The search query used
+   * - `results`: Array of matching messages with:
+   *   - `conversation_id`: Conversation containing the message
+   *   - `message_id`: Message identifier
+   *   - `timestamp`: When the message was created
+   *   - `similarity`: Relevance score (0-1)
+   *   - `snippet`: Text excerpt from the message
+   *   - `git_branch`: Git branch at the time
+   *   - `message_type`: Type of message
+   *   - `role`: Message role (user/assistant)
+   * - `total_found`: Number of results returned
+   *
+   * @example
+   * ```typescript
+   * const result = await handlers.searchConversations({
+   *   query: 'authentication bug fix',
+   *   limit: 5
+   * });
+   * result.results.forEach(r => {
+   *   console.log(`${r.similarity.toFixed(2)}: ${r.snippet}`);
+   * });
+   * ```
    */
   async searchConversations(args: Record<string, unknown>): Promise<Types.SearchConversationsResponse> {
     const typedArgs = args as unknown as Types.SearchConversationsArgs;
@@ -106,7 +202,45 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 3: get_decisions
+   * Find decisions made about a specific topic, file, or component.
+   *
+   * Searches through extracted decisions to find relevant architectural choices,
+   * technical decisions, and their rationale. Shows alternatives considered and
+   * rejected approaches.
+   *
+   * @param args - Decision search arguments:
+   * - `query`: Topic or keyword to search for (required)
+   * - `file_path`: Optional filter for decisions related to a specific file
+   * - `limit`: Maximum number of results (default: 10)
+   *
+   * @returns Decision search results containing:
+   * - `query`: The search query used
+   * - `file_path`: File filter if applied
+   * - `decisions`: Array of matching decisions with:
+   *   - `decision_id`: Decision identifier
+   *   - `decision_text`: The decision that was made
+   *   - `rationale`: Why this decision was made
+   *   - `alternatives_considered`: Other options that were considered
+   *   - `rejected_reasons`: Why alternatives were rejected
+   *   - `context`: Context in which the decision was made
+   *   - `related_files`: Files affected by this decision
+   *   - `related_commits`: Git commits implementing this decision
+   *   - `timestamp`: When the decision was made
+   *   - `similarity`: Relevance score
+   * - `total_found`: Number of decisions returned
+   *
+   * @example
+   * ```typescript
+   * const result = await handlers.getDecisions({
+   *   query: 'database',
+   *   file_path: 'src/storage/SQLiteManager.ts',
+   *   limit: 5
+   * });
+   * result.decisions.forEach(d => {
+   *   console.log(`Decision: ${d.decision_text}`);
+   *   console.log(`Rationale: ${d.rationale}`);
+   * });
+   * ```
    */
   async getDecisions(args: Record<string, unknown>): Promise<Types.GetDecisionsResponse> {
     const typedArgs = args as unknown as Types.GetDecisionsArgs;
@@ -142,7 +276,33 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 4: check_before_modify
+   * Check important context before modifying a file.
+   *
+   * Shows recent changes, related decisions, commits, and past mistakes to avoid
+   * when working on a file. Use this before making significant changes to understand
+   * the file's history and context.
+   *
+   * @param args - Check arguments:
+   * - `file_path`: Path to the file you want to modify (required)
+   *
+   * @returns Context information containing:
+   * - `file_path`: The file being checked
+   * - `warning`: Warning message if important context found
+   * - `recent_changes`: Recent edits and commits to this file
+   *   - `edits`: Recent file edits with timestamps and conversation IDs
+   *   - `commits`: Recent git commits affecting this file
+   * - `related_decisions`: Decisions that affect this file
+   * - `mistakes_to_avoid`: Past mistakes related to this file
+   *
+   * @example
+   * ```typescript
+   * const context = await handlers.checkBeforeModify({
+   *   file_path: 'src/storage/SQLiteManager.ts'
+   * });
+   * console.log(context.warning);
+   * console.log(`${context.related_decisions.length} decisions affect this file`);
+   * console.log(`${context.mistakes_to_avoid.length} mistakes to avoid`);
+   * ```
    */
   async checkBeforeModify(args: Record<string, unknown>): Promise<Types.CheckBeforeModifyResponse> {
     const typedArgs = args as unknown as Types.CheckBeforeModifyArgs;
@@ -188,7 +348,36 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 5: get_file_evolution
+   * Show complete timeline of changes to a file.
+   *
+   * Returns a chronological timeline of all edits, commits, and related decisions
+   * for a specific file across all conversations and git history.
+   *
+   * @param args - Evolution arguments:
+   * - `file_path`: Path to the file (required)
+   * - `include_decisions`: Include related decisions (default: true)
+   * - `include_commits`: Include git commits (default: true)
+   *
+   * @returns File evolution timeline containing:
+   * - `file_path`: The file being analyzed
+   * - `total_edits`: Total number of edits to this file
+   * - `timeline`: Chronological array of events (most recent first):
+   *   - `type`: Event type ('edit', 'commit', or 'decision')
+   *   - `timestamp`: When the event occurred
+   *   - `data`: Event-specific data (conversation_id, commit hash, decision text, etc.)
+   *
+   * @example
+   * ```typescript
+   * const evolution = await handlers.getFileEvolution({
+   *   file_path: 'src/index.ts',
+   *   include_decisions: true,
+   *   include_commits: true
+   * });
+   * console.log(`${evolution.total_edits} edits across ${evolution.timeline.length} events`);
+   * evolution.timeline.forEach(event => {
+   *   console.log(`${event.timestamp}: ${event.type}`);
+   * });
+   * ```
    */
   async getFileEvolution(args: Record<string, unknown>): Promise<Types.GetFileEvolutionResponse> {
     const typedArgs = args as unknown as Types.GetFileEvolutionArgs;
@@ -247,7 +436,42 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 6: link_commits_to_conversations
+   * Link git commits to the conversations where they were made or discussed.
+   *
+   * Finds git commits that are associated with specific conversations, showing
+   * which code changes were made during which conversations. Helps answer "WHY
+   * was this code changed?"
+   *
+   * @param args - Link arguments:
+   * - `query`: Optional search query for commit messages
+   * - `conversation_id`: Optional filter for specific conversation
+   * - `limit`: Maximum number of commits (default: 20)
+   *
+   * @returns Commit links containing:
+   * - `query`: Search query if provided
+   * - `conversation_id`: Conversation filter if provided
+   * - `commits`: Array of linked commits with:
+   *   - `hash`: Short commit hash (7 chars)
+   *   - `full_hash`: Full commit hash
+   *   - `message`: Commit message
+   *   - `author`: Commit author
+   *   - `timestamp`: When commit was made
+   *   - `branch`: Git branch
+   *   - `files_changed`: List of files changed
+   *   - `conversation_id`: Conversation where this was discussed/made
+   * - `total_found`: Number of commits returned
+   *
+   * @example
+   * ```typescript
+   * const links = await handlers.linkCommitsToConversations({
+   *   query: 'fix authentication',
+   *   limit: 10
+   * });
+   * links.commits.forEach(c => {
+   *   console.log(`${c.hash}: ${c.message}`);
+   *   console.log(`  Conversation: ${c.conversation_id}`);
+   * });
+   * ```
    */
   async linkCommitsToConversations(args: Record<string, unknown>): Promise<Types.LinkCommitsToConversationsResponse> {
     const typedArgs = args as Types.LinkCommitsToConversationsArgs;
@@ -289,7 +513,41 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 7: search_mistakes
+   * Find past mistakes to avoid repeating them.
+   *
+   * Searches through extracted mistakes to find documented errors, bugs, and
+   * wrong approaches. Shows what went wrong and how it was corrected.
+   *
+   * @param args - Mistake search arguments:
+   * - `query`: Search query for mistakes (required)
+   * - `mistake_type`: Optional filter by type (logic_error, wrong_approach, misunderstanding, tool_error, syntax_error)
+   * - `limit`: Maximum number of results (default: 10)
+   *
+   * @returns Mistake search results containing:
+   * - `query`: Search query used
+   * - `mistake_type`: Type filter if applied
+   * - `mistakes`: Array of matching mistakes with:
+   *   - `mistake_id`: Mistake identifier
+   *   - `mistake_type`: Type of mistake
+   *   - `what_went_wrong`: Description of the mistake
+   *   - `correction`: How it was fixed
+   *   - `user_correction_message`: User's correction message if available
+   *   - `files_affected`: List of files involved
+   *   - `timestamp`: When the mistake occurred
+   * - `total_found`: Number of mistakes returned
+   *
+   * @example
+   * ```typescript
+   * const mistakes = await handlers.searchMistakes({
+   *   query: 'database transaction',
+   *   mistake_type: 'logic_error',
+   *   limit: 5
+   * });
+   * mistakes.mistakes.forEach(m => {
+   *   console.log(`${m.mistake_type}: ${m.what_went_wrong}`);
+   *   console.log(`Fix: ${m.correction}`);
+   * });
+   * ```
    */
   async searchMistakes(args: Record<string, unknown>): Promise<Types.SearchMistakesResponse> {
     const typedArgs = args as unknown as Types.SearchMistakesArgs;
@@ -326,7 +584,38 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 8: get_requirements
+   * Look up requirements and constraints for a component or feature.
+   *
+   * Finds documented requirements, dependencies, performance constraints, and
+   * compatibility requirements that affect a component or feature.
+   *
+   * @param args - Requirements search arguments:
+   * - `component`: Component or feature name (required)
+   * - `type`: Optional filter by requirement type (dependency, performance, compatibility, business)
+   *
+   * @returns Requirements results containing:
+   * - `component`: Component searched
+   * - `type`: Type filter if applied
+   * - `requirements`: Array of matching requirements with:
+   *   - `requirement_id`: Requirement identifier
+   *   - `type`: Requirement type
+   *   - `description`: Requirement description
+   *   - `rationale`: Why this requirement exists
+   *   - `affects_components`: List of affected components
+   *   - `timestamp`: When requirement was documented
+   * - `total_found`: Number of requirements returned
+   *
+   * @example
+   * ```typescript
+   * const reqs = await handlers.getRequirements({
+   *   component: 'authentication',
+   *   type: 'security'
+   * });
+   * reqs.requirements.forEach(r => {
+   *   console.log(`${r.type}: ${r.description}`);
+   *   console.log(`Rationale: ${r.rationale}`);
+   * });
+   * ```
    */
   async getRequirements(args: Record<string, unknown>): Promise<Types.GetRequirementsResponse> {
     const typedArgs = args as unknown as Types.GetRequirementsArgs;
@@ -361,7 +650,43 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 9: get_tool_history
+   * Query history of tool uses (bash commands, file edits, reads, etc.).
+   *
+   * Shows what tools were used during conversations and their results. Useful
+   * for understanding what commands were run, what files were edited, and
+   * whether operations succeeded or failed.
+   *
+   * @param args - Tool history arguments:
+   * - `tool_name`: Optional filter by tool name (Bash, Edit, Write, Read)
+   * - `file_path`: Optional filter by file path
+   * - `limit`: Maximum number of results (default: 20)
+   *
+   * @returns Tool history containing:
+   * - `tool_name`: Tool filter if applied
+   * - `file_path`: File filter if applied
+   * - `tool_uses`: Array of tool uses with:
+   *   - `tool_use_id`: Tool use identifier
+   *   - `tool_name`: Name of the tool used
+   *   - `tool_input`: Input parameters to the tool
+   *   - `result`: Tool execution result with:
+   *     - `content`: Result content
+   *     - `is_error`: Whether the tool failed
+   *     - `stdout`: Standard output (for Bash)
+   *     - `stderr`: Standard error (for Bash)
+   *   - `timestamp`: When the tool was used
+   * - `total_found`: Number of tool uses returned
+   *
+   * @example
+   * ```typescript
+   * const history = await handlers.getToolHistory({
+   *   tool_name: 'Bash',
+   *   limit: 10
+   * });
+   * history.tool_uses.forEach(t => {
+   *   console.log(`${t.tool_name}: ${JSON.stringify(t.tool_input)}`);
+   *   console.log(`Success: ${!t.result.is_error}`);
+   * });
+   * ```
    */
   async getToolHistory(args: Record<string, unknown>): Promise<Types.GetToolHistoryResponse> {
     const typedArgs = args as Types.GetToolHistoryArgs;
@@ -411,7 +736,39 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 10: find_similar_sessions
+   * Find conversations that dealt with similar topics or problems.
+   *
+   * Searches across all conversations to find ones that discussed similar topics,
+   * allowing you to learn from past work on similar problems.
+   *
+   * @param args - Similarity search arguments:
+   * - `query`: Description of the topic or problem (required)
+   * - `limit`: Maximum number of sessions (default: 5)
+   *
+   * @returns Similar sessions containing:
+   * - `query`: Search query used
+   * - `sessions`: Array of similar conversation sessions with:
+   *   - `conversation_id`: Session identifier
+   *   - `project_path`: Project path for this session
+   *   - `first_message_at`: When the conversation started
+   *   - `message_count`: Number of messages in the conversation
+   *   - `git_branch`: Git branch at the time
+   *   - `relevance_score`: Similarity score to the query
+   *   - `relevant_messages`: Sample of relevant messages from this session
+   * - `total_found`: Number of sessions returned
+   *
+   * @example
+   * ```typescript
+   * const similar = await handlers.findSimilarSessions({
+   *   query: 'implementing user authentication with JWT',
+   *   limit: 3
+   * });
+   * similar.sessions.forEach(s => {
+   *   console.log(`Session ${s.conversation_id} (${s.message_count} messages)`);
+   *   console.log(`Relevance: ${s.relevance_score.toFixed(2)}`);
+   *   console.log(`Messages: ${s.relevant_messages.length} relevant`);
+   * });
+   * ```
    */
   async findSimilarSessions(args: Record<string, unknown>): Promise<Types.FindSimilarSessionsResponse> {
     const typedArgs = args as unknown as Types.FindSimilarSessionsArgs;
@@ -459,8 +816,43 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 11: recall_and_apply
-   * Recall relevant context and format for application to current work
+   * Recall relevant context and format for application to current work.
+   *
+   * This is a comprehensive context retrieval tool that searches across multiple
+   * data sources (conversations, decisions, mistakes, file changes, commits) and
+   * returns actionable suggestions for applying historical context to current work.
+   *
+   * @param args - Recall arguments:
+   * - `query`: What you're working on or need context for (required)
+   * - `context_types`: Types to recall (default: all types)
+   *   - Options: "conversations", "decisions", "mistakes", "file_changes", "commits"
+   * - `file_path`: Optional filter for file-specific context
+   * - `date_range`: Optional [start_timestamp, end_timestamp] filter
+   * - `limit`: Maximum items per context type (default: 5)
+   *
+   * @returns Recalled context containing:
+   * - `query`: Search query used
+   * - `context_summary`: High-level summary of what was found
+   * - `recalled_context`: Structured context data:
+   *   - `conversations`: Relevant past conversations
+   *   - `decisions`: Related decisions with rationale
+   *   - `mistakes`: Past mistakes to avoid
+   *   - `file_changes`: File modification history
+   *   - `commits`: Related git commits
+   * - `application_suggestions`: Actionable suggestions for applying this context
+   * - `total_items_found`: Total number of context items found
+   *
+   * @example
+   * ```typescript
+   * const context = await handlers.recallAndApply({
+   *   query: 'refactoring database connection pooling',
+   *   context_types: ['decisions', 'mistakes', 'commits'],
+   *   file_path: 'src/database/pool.ts',
+   *   limit: 5
+   * });
+   * console.log(context.context_summary);
+   * context.application_suggestions.forEach(s => console.log(`- ${s}`));
+   * ```
    */
   async recallAndApply(args: Record<string, unknown>): Promise<Types.RecallAndApplyResponse> {
     const typedArgs = args as unknown as Types.RecallAndApplyArgs;
@@ -695,7 +1087,44 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 12: generate_documentation
+   * Generate comprehensive project documentation by combining codebase analysis
+   * with conversation history.
+   *
+   * Creates documentation that shows WHAT exists in the code (via CODE-GRAPH-RAG-MCP)
+   * and WHY it was built that way (via conversation history). Requires CODE-GRAPH-RAG-MCP
+   * to be indexed first.
+   *
+   * @param args - Documentation generation arguments:
+   * - `project_path`: Path to the project (defaults to cwd)
+   * - `session_id`: Optional specific session to include
+   * - `scope`: Documentation scope (default: 'full')
+   *   - 'full': Everything (architecture, decisions, quality)
+   *   - 'architecture': Module structure and dependencies
+   *   - 'decisions': Decision log with rationale
+   *   - 'quality': Code quality insights
+   * - `module_filter`: Optional filter for specific module path (e.g., 'src/auth')
+   *
+   * @returns Documentation result containing:
+   * - `success`: Whether generation succeeded
+   * - `project_path`: Project that was documented
+   * - `scope`: Scope of documentation generated
+   * - `documentation`: Generated markdown documentation
+   * - `statistics`: Summary statistics:
+   *   - `modules`: Number of modules documented
+   *   - `decisions`: Number of decisions included
+   *   - `mistakes`: Number of mistakes documented
+   *   - `commits`: Number of commits referenced
+   *
+   * @example
+   * ```typescript
+   * const doc = await handlers.generateDocumentation({
+   *   project_path: '/Users/me/my-project',
+   *   scope: 'full',
+   *   module_filter: 'src/auth'
+   * });
+   * console.log(doc.documentation); // Markdown documentation
+   * console.log(`Documented ${doc.statistics.modules} modules`);
+   * ```
    */
   async generateDocumentation(args: Record<string, unknown>): Promise<Types.GenerateDocumentationResponse> {
     const typedArgs = args as unknown as Types.GenerateDocumentationArgs;
@@ -756,7 +1185,43 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 12: discover_old_conversations
+   * Discover old conversation folders that might contain conversation history
+   * for the current project.
+   *
+   * Searches through stored conversation folders to find potential matches for
+   * the current project path. Useful when project paths have changed (e.g., after
+   * moving or renaming a project directory).
+   *
+   * @param args - Discovery arguments:
+   * - `current_project_path`: Current project path (defaults to cwd)
+   *
+   * @returns Discovery results containing:
+   * - `success`: Whether discovery succeeded
+   * - `current_project_path`: Current project path searched for
+   * - `candidates`: Array of potential matches sorted by score:
+   *   - `folder_name`: Name of the conversation folder
+   *   - `folder_path`: Full path to the folder
+   *   - `stored_project_path`: Original project path stored in conversations
+   *   - `score`: Match score (higher is better match)
+   *   - `stats`: Folder statistics:
+   *     - `conversations`: Number of conversations in folder
+   *     - `messages`: Number of messages in folder
+   *     - `files`: Number of .jsonl files
+   *     - `last_activity`: Timestamp of last activity
+   * - `message`: Human-readable status message
+   *
+   * @example
+   * ```typescript
+   * const discovery = await handlers.discoverOldConversations({
+   *   current_project_path: '/Users/me/projects/my-app'
+   * });
+   * console.log(discovery.message);
+   * discovery.candidates.forEach(c => {
+   *   console.log(`Score ${c.score}: ${c.folder_name}`);
+   *   console.log(`  Original path: ${c.stored_project_path}`);
+   *   console.log(`  Stats: ${c.stats.conversations} conversations, ${c.stats.files} files`);
+   * });
+   * ```
    */
   async discoverOldConversations(args: Record<string, unknown>): Promise<Types.DiscoverOldConversationsResponse> {
     const typedArgs = args as Types.DiscoverOldConversationsArgs;
@@ -801,7 +1266,51 @@ export class ToolHandlers {
   }
 
   /**
-   * Tool 13: migrate_project
+   * Migrate or merge conversation history from an old project path to a new one.
+   *
+   * Use this when a project has been moved or renamed to bring the conversation
+   * history along. Supports two modes: 'migrate' (move all files) or 'merge'
+   * (combine with existing files).
+   *
+   * @param args - Migration arguments:
+   * - `source_folder`: Source folder containing old conversations (required)
+   * - `old_project_path`: Original project path in the conversations (required)
+   * - `new_project_path`: New project path to update to (required)
+   * - `dry_run`: Preview changes without applying them (default: false)
+   * - `mode`: Migration mode (default: 'migrate')
+   *   - 'migrate': Move all files from source to target
+   *   - 'merge': Combine source files with existing target files
+   *
+   * @returns Migration result containing:
+   * - `success`: Whether migration succeeded
+   * - `source_folder`: Source folder path
+   * - `target_folder`: Target folder path (where files were copied)
+   * - `files_copied`: Number of files copied/migrated
+   * - `database_updated`: Whether database was updated with new paths
+   * - `backup_created`: Whether backup was created (always true for non-dry-run)
+   * - `message`: Human-readable status message
+   *
+   * @example
+   * ```typescript
+   * // First, preview with dry run
+   * const preview = await handlers.migrateProject({
+   *   source_folder: '/path/to/old/conversations',
+   *   old_project_path: '/old/path/to/project',
+   *   new_project_path: '/new/path/to/project',
+   *   dry_run: true
+   * });
+   * console.log(preview.message); // "Dry run: Would migrate X files..."
+   *
+   * // Then, execute the migration
+   * const result = await handlers.migrateProject({
+   *   source_folder: '/path/to/old/conversations',
+   *   old_project_path: '/old/path/to/project',
+   *   new_project_path: '/new/path/to/project',
+   *   dry_run: false,
+   *   mode: 'migrate'
+   * });
+   * console.log(`Migrated ${result.files_copied} files`);
+   * ```
    */
   async migrateProject(args: Record<string, unknown>): Promise<Types.MigrateProjectResponse> {
     const typedArgs = args as unknown as Types.MigrateProjectArgs;
