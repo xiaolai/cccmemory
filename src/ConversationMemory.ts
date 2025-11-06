@@ -53,10 +53,12 @@ export class ConversationMemory {
 
     // Parse conversations
     let parseResult = this.parser.parseProject(options.projectPath, options.sessionId);
+    console.log(`📊 BEFORE filter: ${parseResult.conversations.length} conversations, ${parseResult.messages.length} messages`);
 
     // Filter MCP conversations if requested
     if (options.excludeMcpConversations || options.excludeMcpServers) {
       parseResult = this.filterMcpConversations(parseResult, options);
+      console.log(`📊 AFTER filter: ${parseResult.conversations.length} conversations, ${parseResult.messages.length} messages`);
     }
 
     // Store basic entities
@@ -194,64 +196,76 @@ export class ConversationMemory {
 
   /**
    * Filter MCP conversations from parse results
+   * Strategy: Filter at MESSAGE level, not conversation level
+   * - Keep all conversations
+   * - Exclude only messages that invoke specified MCP tools and their responses
    */
   private filterMcpConversations(result: ParseResult, options: IndexOptions): ParseResult {
-    const shouldExcludeConversation = (conv: typeof result.conversations[0]): boolean => {
-      const metadata = conv.metadata as { mcp_usage?: { detected: boolean; servers: string[] } };
+    // Determine which MCP servers to exclude
+    const serversToExclude = new Set<string>();
 
-      if (!metadata.mcp_usage?.detected) {
-        return false; // No MCP usage, don't exclude
+    if (options.excludeMcpServers && options.excludeMcpServers.length > 0) {
+      // Explicit list of servers to exclude
+      options.excludeMcpServers.forEach(s => serversToExclude.add(s));
+    } else if (options.excludeMcpConversations === 'self-only') {
+      // Exclude only conversation-memory server
+      serversToExclude.add('conversation-memory');
+    } else if (options.excludeMcpConversations === 'all-mcp' || options.excludeMcpConversations === true) {
+      // Exclude all MCP tool uses - collect all server names from tool uses
+      for (const toolUse of result.tool_uses) {
+        if (toolUse.tool_name.startsWith('mcp__')) {
+          const parts = toolUse.tool_name.split('__');
+          if (parts.length >= 2) {
+            serversToExclude.add(parts[1]);
+          }
+        }
       }
-
-      // Check exclude_mcp_servers first (most specific)
-      if (options.excludeMcpServers && options.excludeMcpServers.length > 0) {
-        return metadata.mcp_usage.servers.some(
-          server => options.excludeMcpServers?.includes(server)
-        );
-      }
-
-      // Check exclude_mcp_conversations setting
-      if (options.excludeMcpConversations === 'self-only') {
-        return metadata.mcp_usage.servers.includes('conversation-memory');
-      }
-
-      if (options.excludeMcpConversations === 'all-mcp' || options.excludeMcpConversations === true) {
-        return true; // Exclude all MCP conversations
-      }
-
-      return false;
-    };
-
-    // Build set of excluded conversation IDs
-    const excludedConvIds = new Set(
-      result.conversations
-        .filter(shouldExcludeConversation)
-        .map(c => c.id)
-    );
-
-    if (excludedConvIds.size > 0) {
-      console.log(`\n⚠️ Excluding ${excludedConvIds.size} MCP conversation(s) from indexing`);
     }
 
-    // Filter all related entities
+    if (serversToExclude.size === 0) {
+      return result; // Nothing to filter
+    }
+
+    // Build set of excluded tool_use IDs (tools from excluded servers)
+    const excludedToolUseIds = new Set<string>();
+    for (const toolUse of result.tool_uses) {
+      if (toolUse.tool_name.startsWith('mcp__')) {
+        const parts = toolUse.tool_name.split('__');
+        if (parts.length >= 2 && serversToExclude.has(parts[1])) {
+          excludedToolUseIds.add(toolUse.id);
+        }
+      }
+    }
+
+    // Build set of excluded message IDs (messages containing excluded tool uses or their results)
+    const excludedMessageIds = new Set<string>();
+
+    // Exclude assistant messages that contain excluded tool uses
+    for (const toolUse of result.tool_uses) {
+      if (excludedToolUseIds.has(toolUse.id)) {
+        excludedMessageIds.add(toolUse.message_id);
+      }
+    }
+
+    // Exclude user messages that contain tool results for excluded tool uses
+    for (const toolResult of result.tool_results) {
+      if (excludedToolUseIds.has(toolResult.tool_use_id)) {
+        excludedMessageIds.add(toolResult.message_id);
+      }
+    }
+
+    if (excludedMessageIds.size > 0) {
+      console.log(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
+    }
+
+    // Filter messages and related entities
     return {
-      conversations: result.conversations.filter(c => !excludedConvIds.has(c.id)),
-      messages: result.messages.filter(m => !excludedConvIds.has(m.conversation_id)),
-      tool_uses: result.tool_uses.filter(t => {
-        const msg = result.messages.find(m => m.id === t.message_id);
-        return msg && !excludedConvIds.has(msg.conversation_id);
-      }),
-      tool_results: result.tool_results.filter(tr => {
-        const toolUse = result.tool_uses.find(tu => tu.id === tr.tool_use_id);
-        if (!toolUse) {return false;}
-        const msg = result.messages.find(m => m.id === toolUse.message_id);
-        return msg && !excludedConvIds.has(msg.conversation_id);
-      }),
-      file_edits: result.file_edits.filter(fe => !excludedConvIds.has(fe.conversation_id)),
-      thinking_blocks: result.thinking_blocks.filter(tb => {
-        const msg = result.messages.find(m => m.id === tb.message_id);
-        return msg && !excludedConvIds.has(msg.conversation_id);
-      }),
+      conversations: result.conversations, // Keep ALL conversations
+      messages: result.messages.filter(m => !excludedMessageIds.has(m.id)),
+      tool_uses: result.tool_uses.filter(t => !excludedToolUseIds.has(t.id)),
+      tool_results: result.tool_results.filter(tr => !excludedToolUseIds.has(tr.tool_use_id)),
+      file_edits: result.file_edits, // Keep all file edits
+      thinking_blocks: result.thinking_blocks.filter(tb => !excludedMessageIds.has(tb.message_id)),
     };
   }
 }
