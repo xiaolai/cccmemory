@@ -53,12 +53,10 @@ export class ConversationMemory {
 
     // Parse conversations
     let parseResult = this.parser.parseProject(options.projectPath, options.sessionId);
-    console.log(`📊 BEFORE filter: ${parseResult.conversations.length} conversations, ${parseResult.messages.length} messages`);
 
     // Filter MCP conversations if requested
     if (options.excludeMcpConversations || options.excludeMcpServers) {
       parseResult = this.filterMcpConversations(parseResult, options);
-      console.log(`📊 AFTER filter: ${parseResult.conversations.length} conversations, ${parseResult.messages.length} messages`);
     }
 
     // Store basic entities
