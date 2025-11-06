@@ -8,10 +8,18 @@ import { ToolHandlers } from "../tools/ToolHandlers.js";
 import { getSQLiteManager } from "../storage/SQLiteManager.js";
 import { showHelp, showCommandHelp } from "./help.js";
 import { ConfigManager } from "../embeddings/ConfigManager.js";
-import { getModelsByProvider } from "../embeddings/ModelRegistry.js";
+import {
+  getModelsByProvider,
+  getAllModels,
+  getModelsByQuality,
+  getRecommendedModel,
+  modelExists,
+  type ModelInfo
+} from "../embeddings/ModelRegistry.js";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import prompts from "prompts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -198,6 +206,16 @@ export async function executeCommand(
     } else {
       return chalk.yellow("Usage: config                  (show current config)\n       config <key> <value>    (set config value)");
     }
+  }
+
+  // Handle models
+  if (command === "models") {
+    return handleModels(args);
+  }
+
+  // Handle select-model (interactive)
+  if (command === "select-model" || command === "select") {
+    return await handleSelectModel();
   }
 
   // Handle get
@@ -750,6 +768,19 @@ function handleConfigGet(key: string): string {
  */
 function handleConfigSet(key: string, value: string): string {
   try {
+    // Validate model name if setting model
+    if (key === "model") {
+      if (!modelExists(value)) {
+        let warning = chalk.yellow(`⚠️  Model '${value}' is not in the registry.\n\n`);
+        warning += chalk.gray("This might be a custom model. If so, make sure to also set the correct dimensions.\n\n");
+        warning += chalk.cyan("Known models:\n");
+        warning += chalk.gray("  Run 'models' to see all available models\n");
+        warning += chalk.gray("  Or 'models <provider>' to see provider-specific models\n\n");
+        warning += chalk.yellow("Proceeding with custom model...\n\n");
+        console.warn(warning);
+      }
+    }
+
     ConfigManager.setConfigValue(key, value);
 
     // Show confirmation with helpful info
@@ -758,23 +789,14 @@ function handleConfigSet(key: string, value: string): string {
     // If setting dimensions, suggest matching models
     if (key === "dimensions") {
       const dims = parseInt(value, 10);
-      output += chalk.cyan("Models with matching dimensions:\n");
-      if (dims === 384) {
-        output += "  - Xenova/all-MiniLM-L6-v2 (transformers)\n";
-        output += "  - all-minilm (ollama)\n";
-      } else if (dims === 768) {
-        output += "  - nomic-embed-text (ollama)\n";
-        output += "  - Xenova/all-mpnet-base-v2 (transformers)\n";
-      } else if (dims === 1024) {
-        output += "  - mxbai-embed-large (ollama) ⭐ default\n";
-        output += "  - snowflake-arctic-embed (ollama)\n";
-      } else if (dims === 1536) {
-        output += "  - text-embedding-3-small (openai)\n";
-        output += "  - text-embedding-ada-002 (openai)\n";
-      } else if (dims === 3072) {
-        output += "  - text-embedding-3-large (openai)\n";
+      const matchingModels = getAllModels().filter(m => m.dimensions === dims);
+      if (matchingModels.length > 0) {
+        output += chalk.cyan("Models with matching dimensions:\n");
+        for (const model of matchingModels) {
+          output += `  - ${model.name} (${model.provider})\n`;
+        }
+        output += "\n";
       }
-      output += "\n";
     }
 
     // If setting model, suggest dimensions
@@ -790,6 +812,240 @@ function handleConfigSet(key: string, value: string): string {
 
     return output;
   } catch (error) {
+    return chalk.red(`Error: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Handle models command - List, filter, search models
+ * Usage:
+ *   models                    - List all models
+ *   models <provider>         - Filter by provider (ollama, transformers, openai)
+ *   models quality <tier>     - Filter by quality (low, medium, high, highest)
+ *   models recommend          - Show recommended models for each provider
+ */
+function handleModels(args: string[]): string {
+  let output = "";
+
+  // No args: list all models
+  if (args.length === 0) {
+    output += chalk.bold("📚 All Available Embedding Models\n\n");
+    const allModels = getAllModels();
+    output += formatModelsTable(allModels);
+    output += "\n";
+    output += chalk.gray("💡 Tip: Use 'models <provider>' to filter by provider\n");
+    output += chalk.gray("   Or: 'models quality <tier>' to filter by quality\n");
+    output += chalk.gray("   Or: 'models recommend' to see recommendations\n");
+    return output;
+  }
+
+  const subcommand = args[0].toLowerCase();
+
+  // Filter by provider
+  if (["ollama", "transformers", "openai"].includes(subcommand)) {
+    const models = getModelsByProvider(subcommand);
+    output += chalk.bold(`📚 ${capitalize(subcommand)} Models\n\n`);
+    output += formatModelsTable(models);
+
+    // Show recommended model for this provider
+    const recommended = getRecommendedModel(subcommand);
+    if (recommended) {
+      output += "\n";
+      output += chalk.cyan(`⭐ Recommended: ${recommended.name} (${recommended.dimensions} dims, ${recommended.quality} quality)\n`);
+    }
+    return output;
+  }
+
+  // Filter by quality
+  if (subcommand === "quality") {
+    if (args.length < 2) {
+      return chalk.yellow("Usage: models quality <tier>\nTiers: low, medium, high, highest");
+    }
+    const quality = args[1].toLowerCase() as ModelInfo["quality"];
+    if (!["low", "medium", "high", "highest"].includes(quality)) {
+      return chalk.red(`Invalid quality tier: ${args[1]}\nValid tiers: low, medium, high, highest`);
+    }
+    const models = getModelsByQuality(quality);
+    output += chalk.bold(`📚 ${capitalize(quality)} Quality Models\n\n`);
+    output += formatModelsTable(models);
+    return output;
+  }
+
+  // Show recommended models
+  if (subcommand === "recommend" || subcommand === "recommended") {
+    output += chalk.bold("⭐ Recommended Models by Provider\n\n");
+
+    const providers = ["ollama", "transformers", "openai"];
+    for (const provider of providers) {
+      const recommended = getRecommendedModel(provider);
+      if (recommended) {
+        output += chalk.yellow(`${capitalize(provider)}:\n`);
+        output += `  ${chalk.green(recommended.name)} ${chalk.dim(`(${recommended.dimensions} dims, ${recommended.quality} quality)`)}\n`;
+        output += `  ${chalk.dim(recommended.description)}\n`;
+        if (recommended.installation) {
+          output += `  ${chalk.dim(`Install: ${recommended.installation}`)}\n`;
+        }
+        if (recommended.cost) {
+          output += `  ${chalk.dim(`Cost: ${recommended.cost}`)}\n`;
+        }
+        output += "\n";
+      }
+    }
+    return output;
+  }
+
+  return chalk.yellow(`Unknown models subcommand: ${subcommand}\n\nUsage:\n  models                    - List all models\n  models <provider>         - Filter by provider (ollama, transformers, openai)\n  models quality <tier>     - Filter by quality\n  models recommend          - Show recommendations`);
+}
+
+/**
+ * Format models into a table
+ */
+function formatModelsTable(models: ModelInfo[]): string {
+  const table = new Table({
+    head: [
+      chalk.cyan("Model"),
+      chalk.cyan("Provider"),
+      chalk.cyan("Dimensions"),
+      chalk.cyan("Quality"),
+      chalk.cyan("Description")
+    ],
+    colWidths: [35, 13, 12, 10, 45],
+    wordWrap: true,
+  });
+
+  for (const model of models) {
+    table.push([
+      model.name,
+      model.provider,
+      model.dimensions.toString(),
+      model.quality,
+      model.description
+    ]);
+  }
+
+  return table.toString();
+}
+
+/**
+ * Capitalize first letter
+ */
+function capitalize(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+/**
+ * Handle interactive model selection
+ */
+async function handleSelectModel(): Promise<string> {
+  try {
+    // Step 1: Choose provider
+    const providerResponse = await prompts({
+      type: "select",
+      name: "provider",
+      message: "Choose an embedding provider:",
+      choices: [
+        {
+          title: "Ollama (Local, High Quality)",
+          value: "ollama",
+          description: "Run models locally with Ollama. Requires: ollama serve"
+        },
+        {
+          title: "Transformers (Offline, No Setup)",
+          value: "transformers",
+          description: "Auto-download models, runs offline. No external setup needed."
+        },
+        {
+          title: "OpenAI (Cloud, Highest Quality)",
+          value: "openai",
+          description: "Cloud API with best quality. Requires API key and costs money."
+        }
+      ],
+      initial: 0,
+    });
+
+    if (!providerResponse.provider) {
+      return chalk.yellow("Selection cancelled");
+    }
+
+    const provider = providerResponse.provider as string;
+
+    // Step 2: Choose model from that provider
+    const models = getModelsByProvider(provider);
+    const modelChoices = models.map(m => ({
+      title: `${m.name} (${m.dimensions} dims, ${m.quality} quality)`,
+      value: m.name,
+      description: m.description + (m.installation ? ` - ${m.installation}` : "") + (m.cost ? ` - ${m.cost}` : "")
+    }));
+
+    // Highlight recommended model
+    const recommended = getRecommendedModel(provider);
+    if (recommended) {
+      const recIndex = modelChoices.findIndex(c => c.value === recommended.name);
+      if (recIndex >= 0) {
+        modelChoices[recIndex].title = `⭐ ${modelChoices[recIndex].title} (recommended)`;
+      }
+    }
+
+    const modelResponse = await prompts({
+      type: "select",
+      name: "model",
+      message: `Choose a model from ${capitalize(provider)}:`,
+      choices: modelChoices,
+      initial: 0,
+    });
+
+    if (!modelResponse.model) {
+      return chalk.yellow("Selection cancelled");
+    }
+
+    const modelName = modelResponse.model as string;
+    const selectedModel = models.find(m => m.name === modelName);
+
+    if (!selectedModel) {
+      return chalk.red("Error: Model not found");
+    }
+
+    // Step 3: Confirm and save
+    const confirmResponse = await prompts({
+      type: "confirm",
+      name: "confirm",
+      message: `Set ${selectedModel.name} as your embedding model?\n  Provider: ${selectedModel.provider}\n  Dimensions: ${selectedModel.dimensions}\n  Quality: ${selectedModel.quality}`,
+      initial: true,
+    });
+
+    if (!confirmResponse.confirm) {
+      return chalk.yellow("Selection cancelled");
+    }
+
+    // Save configuration
+    ConfigManager.setConfigValue("provider", provider);
+    ConfigManager.setConfigValue("model", modelName);
+    ConfigManager.setConfigValue("dimensions", selectedModel.dimensions.toString());
+
+    let output = chalk.green(`✓ Configuration updated!\n\n`);
+    output += `  Provider: ${chalk.cyan(provider)}\n`;
+    output += `  Model: ${chalk.cyan(modelName)}\n`;
+    output += `  Dimensions: ${chalk.cyan(selectedModel.dimensions)}\n\n`;
+
+    // Add setup instructions
+    if (selectedModel.installation) {
+      output += chalk.yellow(`⚠️  Setup Required:\n`);
+      output += `  ${selectedModel.installation}\n\n`;
+    }
+
+    if (selectedModel.cost) {
+      output += chalk.yellow(`💰 Cost: ${selectedModel.cost}\n\n`);
+    }
+
+    output += chalk.dim("💡 Tip: You may need to reindex conversations for the new model:\n");
+    output += chalk.dim("   reset && index\n\n");
+    output += chalk.gray(`Config saved to: ${ConfigManager.getConfigPath()}\n`);
+
+    return output;
+  } catch (error) {
+    if ((error as { message?: string }).message === "User force closed the prompt") {
+      return chalk.yellow("\nSelection cancelled");
+    }
     return chalk.red(`Error: ${(error as Error).message}`);
   }
 }

@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-01-06
+
+### Added
+
+- **New `models` CLI Command** - Power user features for exploring embedding models
+  - `models` - List all 11 models in a formatted table (name, provider, dimensions, quality, description)
+  - `models <provider>` - Filter by provider (ollama, transformers, openai) with recommended model highlighted
+  - `models quality <tier>` - Filter by quality tier (low, medium, high, highest)
+  - `models recommend` - Show recommended model for each provider with installation/cost info
+
+- **Interactive Model Selection** - User-friendly guided setup
+  - New `select-model` (alias: `select`) command with step-by-step prompts
+  - Choose provider → Choose model → Confirm and save
+  - Recommended models highlighted with ⭐
+  - Shows setup instructions (Ollama pull commands, API key requirements, costs)
+  - Automatically sets provider, model, and dimensions in one go
+
+- **Model Validation** - Prevent configuration mistakes
+  - `set model <name>` now validates against ModelRegistry
+  - Warns if model not found, suggests using `models` command
+  - Allows custom models with warning to set dimensions manually
+
+### Changed
+
+- Enhanced `set dimensions` command - Now dynamically suggests matching models from ModelRegistry (was hardcoded)
+- All CLI model references now powered by ModelRegistry for consistency
+
+### Technical Details
+
+- Interactive prompts powered by existing `prompts` package
+- Zero new dependencies added
+- All new CLI features fully tested (manual testing)
+- 0 errors, 0 warnings, all tests passing
+
 ## [0.4.1] - 2025-01-06
 
 ### Added
