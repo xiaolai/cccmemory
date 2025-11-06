@@ -1,6 +1,20 @@
 /**
- * Conversation Storage Layer
- * CRUD operations for all conversation-related data
+ * Conversation Storage Layer - CRUD operations for all conversation-related data.
+ *
+ * This class provides the data access layer for the conversation-memory system.
+ * It handles storing and retrieving conversations, messages, tool uses, decisions,
+ * mistakes, requirements, and git commits.
+ *
+ * All store operations use transactions for atomicity and performance.
+ * All JSON fields are automatically serialized/deserialized.
+ *
+ * @example
+ * ```typescript
+ * const storage = new ConversationStorage(sqliteManager);
+ * await storage.storeConversations(conversations);
+ * const conv = storage.getConversation('conv-123');
+ * const timeline = storage.getFileTimeline('src/index.ts');
+ * ```
  */
 
 import type { SQLiteManager } from "./SQLiteManager.js";
@@ -19,11 +33,48 @@ import type { Requirement, Validation } from "../parsers/RequirementsExtractor.j
 import { sanitizeForLike } from "../utils/sanitization.js";
 import type { DecisionRow, GitCommitRow, ConversationRow } from "../types/ToolTypes.js";
 
+/**
+ * Data access layer for conversation memory storage.
+ *
+ * Provides CRUD operations for all conversation-related entities using SQLite.
+ */
 export class ConversationStorage {
+  /**
+   * Create a new ConversationStorage instance.
+   *
+   * @param db - SQLiteManager instance for database access
+   */
   constructor(private db: SQLiteManager) {}
 
   // ==================== Conversations ====================
 
+  /**
+   * Store conversations in the database.
+   *
+   * Uses INSERT OR REPLACE to handle both new and updated conversations.
+   * All operations are performed in a single transaction for atomicity.
+   *
+   * @param conversations - Array of conversation objects to store
+   * @returns Promise that resolves when all conversations are stored
+   *
+   * @example
+   * ```typescript
+   * await storage.storeConversations([
+   *   {
+   *     id: 'conv-123',
+   *     project_path: '/path/to/project',
+   *     first_message_at: Date.now(),
+   *     last_message_at: Date.now(),
+   *     message_count: 42,
+   *     git_branch: 'main',
+   *     claude_version: '3.5',
+   *     metadata: {},
+   *     created_at: Date.now(),
+   *     updated_at: Date.now()
+   *   }
+   * ]);
+   * ```
+   */
   async storeConversations(conversations: Conversation[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO conversations
@@ -52,6 +103,20 @@ export class ConversationStorage {
     console.log(`✓ Stored ${conversations.length} conversations`);
   }
 
+  /**
+   * Retrieve a single conversation by ID.
+   *
+   * @param id - Conversation ID to retrieve
+   * @returns Conversation object if found, null otherwise
+   *
+   * @example
+   * ```typescript
+   * const conv = storage.getConversation('conv-123');
+   * if (conv) {
+   *   console.log(`${conv.message_count} messages on ${conv.git_branch}`);
+   * }
+   * ```
+   */
   getConversation(id: string): Conversation | null {
     const row = this.db
       .prepare("SELECT * FROM conversations WHERE id = ?")
@@ -69,6 +134,31 @@ export class ConversationStorage {
 
   // ==================== Messages ====================
 
+  /**
+   * Store messages in the database.
+   *
+   * Stores all messages from conversations including content, metadata, and relationships.
+   * Uses INSERT OR REPLACE for idempotent storage.
+   *
+   * @param messages - Array of message objects to store
+   * @returns Promise that resolves when all messages are stored
+   *
+   * @example
+   * ```typescript
+   * await storage.storeMessages([
+   *   {
+   *     id: 'msg-123',
+   *     conversation_id: 'conv-123',
+   *     message_type: 'text',
+   *     role: 'user',
+   *     content: 'Hello',
+   *     timestamp: Date.now(),
+   *     is_sidechain: false,
+   *     metadata: {}
+   *   }
+   * ]);
+   * ```
+   */
   async storeMessages(messages: Message[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO messages
@@ -102,6 +192,14 @@ export class ConversationStorage {
 
   // ==================== Tool Uses ====================
 
+  /**
+   * Store tool use records in the database.
+   *
+   * Records all tool invocations from assistant messages.
+   *
+   * @param toolUses - Array of tool use objects
+   * @returns Promise that resolves when stored
+   */
   async storeToolUses(toolUses: ToolUse[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO tool_uses
@@ -126,6 +224,14 @@ export class ConversationStorage {
 
   // ==================== Tool Results ====================
 
+  /**
+   * Store tool execution results in the database.
+   *
+   * Records the output/results from tool invocations.
+   *
+   * @param toolResults - Array of tool result objects
+   * @returns Promise that resolves when stored
+   */
   async storeToolResults(toolResults: ToolResult[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO tool_results
@@ -154,6 +260,14 @@ export class ConversationStorage {
 
   // ==================== File Edits ====================
 
+  /**
+   * Store file edit records in the database.
+   *
+   * Records all file modifications made during conversations.
+   *
+   * @param fileEdits - Array of file edit objects
+   * @returns Promise that resolves when stored
+   */
   async storeFileEdits(fileEdits: FileEdit[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO file_edits
@@ -180,6 +294,12 @@ export class ConversationStorage {
     console.log(`✓ Stored ${fileEdits.length} file edits`);
   }
 
+  /**
+   * Retrieve all edits for a specific file.
+   *
+   * @param filePath - Path to the file
+   * @returns Array of file edits, ordered by timestamp (most recent first)
+   */
   getFileEdits(filePath: string): FileEdit[] {
     return this.db
       .prepare(
@@ -190,6 +310,15 @@ export class ConversationStorage {
 
   // ==================== Thinking Blocks ====================
 
+  /**
+   * Store thinking blocks in the database.
+   *
+   * Thinking blocks contain Claude's internal reasoning. They can be large and
+   * are optionally indexed based on the includeThinking flag.
+   *
+   * @param blocks - Array of thinking block objects
+   * @returns Promise that resolves when stored
+   */
   async storeThinkingBlocks(blocks: ThinkingBlock[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO thinking_blocks
@@ -214,6 +343,14 @@ export class ConversationStorage {
 
   // ==================== Decisions ====================
 
+  /**
+   * Store extracted decisions in the database.
+   *
+   * Decisions include architectural choices, technical decisions, and their rationale.
+   *
+   * @param decisions - Array of decision objects
+   * @returns Promise that resolves when stored
+   */
   async storeDecisions(decisions: Decision[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO decisions
@@ -244,6 +381,13 @@ export class ConversationStorage {
     console.log(`✓ Stored ${decisions.length} decisions`);
   }
 
+  /**
+   * Retrieve all decisions related to a specific file.
+   *
+   * @param filePath - Path to the file
+   * @returns Array of decisions that reference this file
+   * @internal
+   */
   getDecisionsForFile(filePath: string): Decision[] {
     const sanitized = sanitizeForLike(filePath);
     const rows = this.db
@@ -261,6 +405,14 @@ export class ConversationStorage {
 
   // ==================== Git Commits ====================
 
+  /**
+   * Store git commit records linked to conversations.
+   *
+   * Links git commits to the conversations where they were made or discussed.
+   *
+   * @param commits - Array of git commit objects
+   * @returns Promise that resolves when stored
+   */
   async storeGitCommits(commits: GitCommit[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO git_commits
@@ -303,6 +455,14 @@ export class ConversationStorage {
 
   // ==================== Mistakes ====================
 
+  /**
+   * Store extracted mistakes in the database.
+   *
+   * Mistakes include errors, bugs, and wrong approaches that were later corrected.
+   *
+   * @param mistakes - Array of mistake objects
+   * @returns Promise that resolves when stored
+   */
   async storeMistakes(mistakes: Mistake[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO mistakes
@@ -332,6 +492,14 @@ export class ConversationStorage {
 
   // ==================== Requirements ====================
 
+  /**
+   * Store extracted requirements in the database.
+   *
+   * Requirements include dependencies, constraints, and specifications for components.
+   *
+   * @param requirements - Array of requirement objects
+   * @returns Promise that resolves when stored
+   */
   async storeRequirements(requirements: Requirement[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO requirements
@@ -360,6 +528,14 @@ export class ConversationStorage {
 
   // ==================== Validations ====================
 
+  /**
+   * Store validation records in the database.
+   *
+   * Validations capture test results and performance data from conversations.
+   *
+   * @param validations - Array of validation objects
+   * @returns Promise that resolves when stored
+   */
   async storeValidations(validations: Validation[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO validations
@@ -388,6 +564,27 @@ export class ConversationStorage {
 
   // ==================== Queries ====================
 
+  /**
+   * Get the complete timeline of changes to a file.
+   *
+   * Combines file edits, git commits, and related decisions into a single timeline.
+   * This is a key method used by tools like checkBeforeModify and getFileEvolution.
+   *
+   * @param filePath - Path to the file
+   * @returns Object containing:
+   * - `file_path`: The file path queried
+   * - `edits`: All file edit records
+   * - `commits`: All git commits affecting this file
+   * - `decisions`: All decisions related to this file
+   *
+   * @example
+   * ```typescript
+   * const timeline = storage.getFileTimeline('src/index.ts');
+   * console.log(`${timeline.edits.length} edits`);
+   * console.log(`${timeline.commits.length} commits`);
+   * console.log(`${timeline.decisions.length} decisions`);
+   * ```
+   */
   getFileTimeline(filePath: string): {
     file_path: string;
     edits: FileEdit[];
@@ -407,6 +604,27 @@ export class ConversationStorage {
     };
   }
 
+  /**
+   * Get statistics about the indexed conversation data.
+   *
+   * Returns counts of all major entity types stored in the database.
+   * Used for displaying indexing results and system health checks.
+   *
+   * @returns Object containing counts for:
+   * - `conversations`: Total conversations indexed
+   * - `messages`: Total messages stored
+   * - `decisions`: Total decisions extracted
+   * - `mistakes`: Total mistakes documented
+   * - `git_commits`: Total git commits linked
+   *
+   * @example
+   * ```typescript
+   * const stats = storage.getStats();
+   * console.log(`Indexed ${stats.conversations.count} conversations`);
+   * console.log(`Extracted ${stats.decisions.count} decisions`);
+   * console.log(`Linked ${stats.git_commits.count} commits`);
+   * ```
+   */
   getStats(): {
     conversations: { count: number };
     messages: { count: number };
