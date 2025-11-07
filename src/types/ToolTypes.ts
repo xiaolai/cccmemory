@@ -471,3 +471,31 @@ export interface MigrateProjectResponse {
   backup_created: boolean;
   message: string;
 }
+
+// ============================================================================
+// Forget By Topic Tool
+// ============================================================================
+
+export interface ForgetByTopicArgs {
+  keywords: string[];
+  project_path?: string;
+  confirm?: boolean;
+}
+
+export interface ForgetByTopicResponse {
+  success: boolean;
+  preview_mode: boolean;
+  conversations_found: number;
+  conversations_deleted: number;
+  messages_deleted: number;
+  decisions_deleted: number;
+  mistakes_deleted: number;
+  backup_path: string | null;
+  conversation_summaries: Array<{
+    id: string;
+    session_id: string;
+    created_at: string;
+    message_count: number;
+  }>;
+  message: string;
+}

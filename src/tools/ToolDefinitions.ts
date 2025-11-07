@@ -354,4 +354,29 @@ export const TOOLS = {
       required: ["source_folder", "old_project_path", "new_project_path"],
     },
   },
+
+  forget_by_topic: {
+    name: "forget_by_topic",
+    description: "Forget conversations about specific topics or keywords. Searches for matching conversations and optionally deletes them with automatic backup. Use confirm=false to preview what would be deleted, then set confirm=true to actually delete.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        keywords: {
+          type: "array",
+          description: "Topics or keywords to search for (e.g., ['authentication', 'redesign'])",
+          items: { type: "string" },
+        },
+        project_path: {
+          type: "string",
+          description: "Path to the project (defaults to current working directory)",
+        },
+        confirm: {
+          type: "boolean",
+          description: "Set to true to actually delete conversations. If false (default), only shows preview of what would be deleted",
+          default: false,
+        },
+      },
+      required: ["keywords"],
+    },
+  },
 };

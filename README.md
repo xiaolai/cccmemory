@@ -11,6 +11,7 @@ A Model Context Protocol (MCP) server that gives Claude Code long-term memory by
 - **Analyzes file history** - See the complete evolution of files with context
 - **Migrates conversation history** - Keep your history when renaming or moving projects
 - **Context transfer** - Recall past work and apply it to current tasks ("remember X, now do Y based on that")
+- **Forget selectively** - Delete conversations by topic/keyword with automatic backups
 
 ## ⚠️ Important: Claude Code CLI Only
 
@@ -535,6 +536,58 @@ Backup created at: .claude-conversations-memory.db.bak
 | Duplicate IDs | Overwrites target | Skips source (keeps target) |
 | Use case | Renamed project | Combine different projects |
 | Backup location | Source folder | Target folder |
+
+### Forget Conversations by Topic
+
+You can selectively delete conversations about specific topics or keywords. The tool automatically creates a backup before deletion.
+
+**Step 1: Preview what would be deleted**
+
+```
+You: "Show me conversations about authentication redesign"
+```
+
+Claude will use `forget_by_topic` with `confirm=false` to preview:
+```
+Found 3 conversations (45 messages, 8 decisions, 2 mistakes) matching: authentication, redesign
+
+Conversations:
+- 2024-01-15: Session abc123 (15 messages)
+- 2024-01-18: Session def456 (20 messages)
+- 2024-01-20: Session ghi789 (10 messages)
+
+Set confirm=true to delete these conversations.
+```
+
+**Step 2: Confirm deletion**
+
+```
+You: "Yes, forget all conversations about authentication redesign"
+```
+
+Claude will use `forget_by_topic` with `confirm=true`:
+```
+✓ Backup created: ~/.claude/backups/my-project/backup-20250107-143022.json
+✓ Deleted 3 conversations (45 messages, 8 decisions, 2 mistakes)
+✓ Git commits preserved (only unlinked)
+```
+
+**Safety features:**
+- **Automatic backup** - Data exported to JSON before deletion
+- **Preview mode** - Always shows what would be deleted first
+- **Cascading deletion** - Automatically removes messages, decisions, mistakes, embeddings
+- **Git preservation** - Git commits are unlinked but not deleted
+
+**⚠️ Important Notes:**
+- Deletion is irreversible (even with backups, restoration requires manual work)
+- Backups are stored in `~/.claude/backups/{project-name}/`
+- Keywords are matched using semantic + full-text search
+- All related data (messages, decisions, mistakes) is deleted
+
+**Example keywords:**
+- "authentication", "redesign" - Broad topics
+- "bug in parser" - Specific issues
+- "refactoring", "cleanup" - Development phases
 
 ## 📚 Learn More
 

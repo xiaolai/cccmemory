@@ -119,6 +119,10 @@ export class ConversationMemoryServer {
             result = await this.handlers.migrateProject(args as Record<string, unknown>);
             break;
 
+          case "forget_by_topic":
+            result = await this.handlers.forgetByTopic(args as Record<string, unknown>);
+            break;
+
           default:
             throw new Error(`Unknown tool: ${name}`);
         }

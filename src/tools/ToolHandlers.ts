@@ -30,6 +30,7 @@ import type * as Types from "../types/ToolTypes.js";
 import { DocumentationGenerator } from "../documentation/DocumentationGenerator.js";
 import { ProjectMigration } from "../utils/ProjectMigration.js";
 import { pathToProjectFolderName } from "../utils/sanitization.js";
+import { DeletionService } from "../storage/DeletionService.js";
 import { readdirSync } from "fs";
 import { join } from "path";
 
@@ -1356,5 +1357,148 @@ export class ToolHandlers {
       backup_created: !dryRun && result.databaseUpdated,
       message
     };
+  }
+
+  /**
+   * Forget conversations by topic/keywords.
+   *
+   * Searches for conversations matching the provided keywords and optionally deletes them.
+   * Creates automatic backup before deletion.
+   *
+   * @param args - Arguments:
+   * - `keywords`: Array of keywords/topics to search for
+   * - `project_path`: Path to the project (defaults to cwd)
+   * - `confirm`: Must be true to actually delete (default: false for preview)
+   *
+   * @returns Result containing:
+   * - `success`: Whether operation succeeded
+   * - `preview_mode`: Whether this was a preview (confirm=false)
+   * - `conversations_found`: Number of conversations matching keywords
+   * - `conversations_deleted`: Number of conversations actually deleted
+   * - `messages_deleted`: Number of messages deleted
+   * - `decisions_deleted`: Number of decisions deleted
+   * - `mistakes_deleted`: Number of mistakes deleted
+   * - `backup_path`: Path to backup file (if deletion occurred)
+   * - `conversation_summaries`: List of conversations with basic info
+   * - `message`: Human-readable status message
+   *
+   * @example
+   * ```typescript
+   * // Preview what would be deleted
+   * const preview = await handlers.forgetByTopic({
+   *   keywords: ['authentication', 'redesign'],
+   *   confirm: false
+   * });
+   *
+   * // Actually delete after reviewing preview
+   * const result = await handlers.forgetByTopic({
+   *   keywords: ['authentication', 'redesign'],
+   *   confirm: true
+   * });
+   * ```
+   */
+  async forgetByTopic(args: unknown): Promise<Types.ForgetByTopicResponse> {
+    const typedArgs = args as Types.ForgetByTopicArgs;
+    const keywords = typedArgs.keywords || [];
+    const projectPath = typedArgs.project_path || process.cwd();
+    const confirm = typedArgs.confirm || false;
+
+    if (keywords.length === 0) {
+      return {
+        success: false,
+        preview_mode: true,
+        conversations_found: 0,
+        conversations_deleted: 0,
+        messages_deleted: 0,
+        decisions_deleted: 0,
+        mistakes_deleted: 0,
+        backup_path: null,
+        conversation_summaries: [],
+        message: "No keywords provided. Please specify keywords/topics to search for."
+      };
+    }
+
+    try {
+      // Create deletion service
+      const storage = this.memory.getStorage();
+      const semanticSearch = this.memory.getSemanticSearch();
+      const deletionService = new DeletionService(
+        this.db.getDatabase(),
+        storage,
+        semanticSearch
+      );
+
+      // Preview what would be deleted
+      const preview = await deletionService.previewDeletionByTopic(keywords, projectPath);
+
+      if (preview.conversationIds.length === 0) {
+        return {
+          success: true,
+          preview_mode: true,
+          conversations_found: 0,
+          conversations_deleted: 0,
+          messages_deleted: 0,
+          decisions_deleted: 0,
+          mistakes_deleted: 0,
+          backup_path: null,
+          conversation_summaries: [],
+          message: preview.summary
+        };
+      }
+
+      // Format conversation summaries for response
+      const conversationSummaries = preview.conversations.map(conv => ({
+        id: conv.id,
+        session_id: conv.session_id,
+        created_at: new Date(conv.created_at).toISOString(),
+        message_count: conv.message_count
+      }));
+
+      // If not confirmed, return preview
+      if (!confirm) {
+        return {
+          success: true,
+          preview_mode: true,
+          conversations_found: preview.conversationIds.length,
+          conversations_deleted: 0,
+          messages_deleted: 0,
+          decisions_deleted: 0,
+          mistakes_deleted: 0,
+          backup_path: null,
+          conversation_summaries: conversationSummaries,
+          message: `${preview.summary}\n\nSet confirm=true to delete these conversations.`
+        };
+      }
+
+      // Actually delete with backup
+      const result = await deletionService.forgetByTopic(keywords, projectPath);
+
+      return {
+        success: true,
+        preview_mode: false,
+        conversations_found: result.deleted.conversations,
+        conversations_deleted: result.deleted.conversations,
+        messages_deleted: result.deleted.messages,
+        decisions_deleted: result.deleted.decisions,
+        mistakes_deleted: result.deleted.mistakes,
+        backup_path: result.backup.backupPath,
+        conversation_summaries: conversationSummaries,
+        message: result.summary
+      };
+
+    } catch (error) {
+      return {
+        success: false,
+        preview_mode: !confirm,
+        conversations_found: 0,
+        conversations_deleted: 0,
+        messages_deleted: 0,
+        decisions_deleted: 0,
+        mistakes_deleted: 0,
+        backup_path: null,
+        conversation_summaries: [],
+        message: `Error: ${(error as Error).message}`
+      };
+    }
   }
 }
