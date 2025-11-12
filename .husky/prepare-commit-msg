@@ -1,6 +1,3 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 # prepare-commit-msg hook
 # Reminds developers to update CHANGELOG.md for significant changes
 
