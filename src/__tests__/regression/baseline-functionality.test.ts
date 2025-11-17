@@ -18,7 +18,10 @@ import { rmSync } from 'fs';
 import { join } from 'path';
 
 // Skip Transformers tests in CI due to environment compatibility issues
+// Also skip on macOS ARM64 where ONNX runtime has known compatibility issues
 const isCI = Boolean(process.env.CI) || Boolean(process.env.GITHUB_ACTIONS);
+const isMacOSArm64 = process.platform === 'darwin' && process.arch === 'arm64';
+const skipTransformers = isCI || isMacOSArm64;
 
 describe('Regression Tests - Baseline Functionality', () => {
   let testDbPath: string;
@@ -75,8 +78,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       expect(typeof stats.messages.count).toBe('number');
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('should handle search on empty database', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('should handle search on empty database', async () => {
       const memory = new ConversationMemory();
 
       // Search with no indexed conversations
@@ -115,8 +118,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       expect(typeof result.message).toBe('string');
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('searchConversations - baseline response structure', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('searchConversations - baseline response structure', async () => {
       const result = await handlers.searchConversations({
         query: 'test query',
         limit: 10,
@@ -132,8 +135,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       expect(typeof result.total_found).toBe('number');
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('getDecisions - baseline response structure', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('getDecisions - baseline response structure', async () => {
       const result = await handlers.getDecisions({
         query: 'database',
         limit: 10,
@@ -177,8 +180,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       expect(Array.isArray(result.timeline)).toBe(true);
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('searchMistakes - baseline response structure', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('searchMistakes - baseline response structure', async () => {
       const result = await handlers.searchMistakes({
         query: 'test',
         limit: 10,
@@ -205,8 +208,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       expect(Array.isArray(result.requirements)).toBe(true);
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('findSimilarSessions - baseline response structure', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('findSimilarSessions - baseline response structure', async () => {
       const result = await handlers.findSimilarSessions({
         query: 'authentication',
         limit: 5,
@@ -220,8 +223,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       expect(Array.isArray(result.sessions)).toBe(true);
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('recallAndApply - baseline response structure', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('recallAndApply - baseline response structure', async () => {
       const result = await handlers.recallAndApply({
         query: 'authentication',
         context_types: ['conversations', 'decisions'],
@@ -285,8 +288,8 @@ describe('Regression Tests - Baseline Functionality', () => {
   });
 
   describe('Edge Cases - Must Handle Gracefully', () => {
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('should handle empty query in search', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('should handle empty query in search', async () => {
       const memory = new ConversationMemory();
 
       // Empty query should still work
@@ -297,8 +300,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       expect(results.length).toBe(0);
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('should handle very large limit in search', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('should handle very large limit in search', async () => {
       const memory = new ConversationMemory();
 
       // Large limit should not crash
@@ -308,8 +311,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       // Should not throw or hang
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('should handle special characters in queries', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('should handle special characters in queries', async () => {
       const memory = new ConversationMemory();
 
       // Special characters should not break search
@@ -326,8 +329,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       }
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('should handle concurrent searches', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('should handle concurrent searches', async () => {
       const memory = new ConversationMemory();
 
       // Multiple concurrent searches should not conflict
@@ -365,8 +368,8 @@ describe('Regression Tests - Baseline Functionality', () => {
       }
     });
 
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('should handle missing tool handler arguments gracefully', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('should handle missing tool handler arguments gracefully', async () => {
       resetSQLiteManager();
       const db = getSQLiteManager({ dbPath: testDbPath });
       const memory = new ConversationMemory();
@@ -385,8 +388,8 @@ describe('Regression Tests - Baseline Functionality', () => {
   });
 
   describe('Performance Baselines', () => {
-    // Skip in CI - TransformersEmbeddings has environment compatibility issues
-    (isCI ? it.skip : it)('search should complete in reasonable time', async () => {
+    // Skip on incompatible platforms - TransformersEmbeddings has ONNX runtime issues on macOS ARM64
+    (skipTransformers ? it.skip : it)('search should complete in reasonable time', async () => {
       const memory = new ConversationMemory();
 
       const start = Date.now();
