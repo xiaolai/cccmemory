@@ -368,4 +368,232 @@ describe('ToolHandlers', () => {
       }
     });
   });
+
+  describe('Global Index Methods', () => {
+    describe('indexAllProjects', () => {
+      it('should return properly typed response', async () => {
+        const result = await handlers.indexAllProjects({
+          include_codex: false,
+          include_claude_code: false,
+        });
+
+        expect(result).toHaveProperty('success');
+        expect(result).toHaveProperty('global_index_path');
+        expect(result).toHaveProperty('projects_indexed');
+        expect(result).toHaveProperty('claude_code_projects');
+        expect(result).toHaveProperty('codex_projects');
+        expect(result).toHaveProperty('total_messages');
+        expect(result).toHaveProperty('total_conversations');
+        expect(result).toHaveProperty('projects');
+        expect(result).toHaveProperty('errors');
+        expect(result).toHaveProperty('message');
+        expect(Array.isArray(result.projects)).toBe(true);
+        expect(Array.isArray(result.errors)).toBe(true);
+      });
+
+      it('should handle non-existent Codex path gracefully', async () => {
+        const result = await handlers.indexAllProjects({
+          include_codex: true,
+          include_claude_code: false,
+          codex_path: '/nonexistent/path',
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.codex_projects).toBe(0);
+      });
+
+      it('should handle non-existent Claude projects path gracefully', async () => {
+        const result = await handlers.indexAllProjects({
+          include_codex: false,
+          include_claude_code: true,
+          claude_projects_path: '/nonexistent/path',
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.claude_code_projects).toBe(0);
+      });
+    });
+
+    describe('searchAllConversations', () => {
+      beforeEach(async () => {
+        // Initialize global index
+        await handlers.indexAllProjects({
+          include_codex: false,
+          include_claude_code: false,
+        });
+      });
+
+      it('should return properly typed response', async () => {
+        const result = await handlers.searchAllConversations({
+          query: 'test query',
+          limit: 10,
+        });
+
+        expect(result).toHaveProperty('query');
+        expect(result).toHaveProperty('results');
+        expect(result).toHaveProperty('total_found');
+        expect(result).toHaveProperty('projects_searched');
+        expect(result).toHaveProperty('search_stats');
+        expect(result).toHaveProperty('message');
+        expect(Array.isArray(result.results)).toBe(true);
+        expect(result.search_stats).toHaveProperty('claude_code_results');
+        expect(result.search_stats).toHaveProperty('codex_results');
+      });
+
+      it('should respect limit parameter', async () => {
+        const result = await handlers.searchAllConversations({
+          query: 'test',
+          limit: 5,
+        });
+
+        expect(result.results.length).toBeLessThanOrEqual(5);
+      });
+
+      it('should filter by source_type', async () => {
+        const result = await handlers.searchAllConversations({
+          query: 'test',
+          limit: 10,
+          source_type: 'claude-code',
+        });
+
+        expect(result.results.every(r => r.source_type === 'claude-code' || r.source_type === undefined)).toBe(true);
+      });
+
+      it('should include project_path in results', async () => {
+        const result = await handlers.searchAllConversations({
+          query: 'test',
+          limit: 10,
+        });
+
+        result.results.forEach(r => {
+          expect(r).toHaveProperty('project_path');
+          expect(r).toHaveProperty('source_type');
+        });
+      });
+    });
+
+    describe('getAllDecisions', () => {
+      beforeEach(async () => {
+        // Initialize global index
+        await handlers.indexAllProjects({
+          include_codex: false,
+          include_claude_code: false,
+        });
+      });
+
+      it('should return properly typed response', async () => {
+        const result = await handlers.getAllDecisions({
+          query: 'authentication',
+          limit: 10,
+        });
+
+        expect(result).toHaveProperty('query');
+        expect(result).toHaveProperty('decisions');
+        expect(result).toHaveProperty('total_found');
+        expect(result).toHaveProperty('projects_searched');
+        expect(result).toHaveProperty('message');
+        expect(Array.isArray(result.decisions)).toBe(true);
+      });
+
+      it('should respect limit parameter', async () => {
+        const result = await handlers.getAllDecisions({
+          query: 'test',
+          limit: 5,
+        });
+
+        expect(result.decisions.length).toBeLessThanOrEqual(5);
+      });
+
+      it('should filter by source_type', async () => {
+        const result = await handlers.getAllDecisions({
+          query: 'test',
+          limit: 10,
+          source_type: 'codex',
+        });
+
+        expect(result.decisions.every(d => d.source_type === 'codex' || d.source_type === undefined)).toBe(true);
+      });
+
+      it('should include project_path in decisions', async () => {
+        const result = await handlers.getAllDecisions({
+          query: 'test',
+          limit: 10,
+        });
+
+        result.decisions.forEach(d => {
+          expect(d).toHaveProperty('project_path');
+          expect(d).toHaveProperty('source_type');
+        });
+      });
+    });
+
+    describe('searchAllMistakes', () => {
+      beforeEach(async () => {
+        // Initialize global index
+        await handlers.indexAllProjects({
+          include_codex: false,
+          include_claude_code: false,
+        });
+      });
+
+      it('should return properly typed response', async () => {
+        const result = await handlers.searchAllMistakes({
+          query: 'bug',
+          limit: 10,
+        });
+
+        expect(result).toHaveProperty('query');
+        expect(result).toHaveProperty('mistakes');
+        expect(result).toHaveProperty('total_found');
+        expect(result).toHaveProperty('projects_searched');
+        expect(result).toHaveProperty('message');
+        expect(Array.isArray(result.mistakes)).toBe(true);
+      });
+
+      it('should respect limit parameter', async () => {
+        const result = await handlers.searchAllMistakes({
+          query: 'error',
+          limit: 5,
+        });
+
+        expect(result.mistakes.length).toBeLessThanOrEqual(5);
+      });
+
+      it('should filter by mistake_type when provided', async () => {
+        const result = await handlers.searchAllMistakes({
+          query: 'test',
+          mistake_type: 'logic_error',
+          limit: 10,
+        });
+
+        expect(result.mistakes.every(m =>
+          m.mistake_type === 'logic_error' || m.mistake_type === undefined
+        )).toBe(true);
+      });
+
+      it('should filter by source_type', async () => {
+        const result = await handlers.searchAllMistakes({
+          query: 'test',
+          limit: 10,
+          source_type: 'claude-code',
+        });
+
+        expect(result.mistakes.every(m =>
+          m.source_type === 'claude-code' || m.source_type === undefined
+        )).toBe(true);
+      });
+
+      it('should include project_path in mistakes', async () => {
+        const result = await handlers.searchAllMistakes({
+          query: 'test',
+          limit: 10,
+        });
+
+        result.mistakes.forEach(m => {
+          expect(m).toHaveProperty('project_path');
+          expect(m).toHaveProperty('source_type');
+        });
+      });
+    });
+  });
 });

@@ -115,7 +115,7 @@ export class CodexConversationParser {
           continue;
         }
 
-        const match = filename.match(/rollout-.+-(.+)\.jsonl$/);
+        const match = filename.match(/rollout-\d+-(.+)\.jsonl$/);
         if (!match) {
           continue;
         }

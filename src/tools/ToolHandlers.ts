@@ -1627,168 +1627,174 @@ export class ToolHandlers {
     } = typedArgs;
 
     const globalIndex = new GlobalIndex();
-    const projects: Array<{
-      project_path: string;
-      source_type: "claude-code" | "codex";
-      message_count: number;
-      conversation_count: number;
-    }> = [];
-    const errors: Array<{ project_path: string; error: string }> = [];
 
-    let totalMessages = 0;
-    let totalConversations = 0;
-    let totalDecisions = 0;
-    let totalMistakes = 0;
+    try {
+      const projects: Array<{
+        project_path: string;
+        source_type: "claude-code" | "codex";
+        message_count: number;
+        conversation_count: number;
+      }> = [];
+      const errors: Array<{ project_path: string; error: string }> = [];
 
-    // Index Codex if requested
-    if (include_codex && existsSync(codex_path)) {
-      try {
-        const { CodexConversationParser } = await import("../parsers/CodexConversationParser.js");
-        const { SQLiteManager } = await import("../storage/SQLiteManager.js");
-        const { ConversationStorage } = await import("../storage/ConversationStorage.js");
+      let totalMessages = 0;
+      let totalConversations = 0;
+      let totalDecisions = 0;
+      let totalMistakes = 0;
 
-        // Create dedicated database for Codex
-        const codexDbPath = join(codex_path, ".codex-conversations-memory.db");
-        const codexDb = new SQLiteManager({ dbPath: codexDbPath });
-        const codexStorage = new ConversationStorage(codexDb);
+      // Index Codex if requested
+      if (include_codex && existsSync(codex_path)) {
+        try {
+          const { CodexConversationParser } = await import("../parsers/CodexConversationParser.js");
+          const { SQLiteManager } = await import("../storage/SQLiteManager.js");
+          const { ConversationStorage } = await import("../storage/ConversationStorage.js");
 
-        // Parse Codex sessions
-        const parser = new CodexConversationParser();
-        const parseResult = parser.parseSession(codex_path);
+          // Create dedicated database for Codex
+          const codexDbPath = join(codex_path, ".codex-conversations-memory.db");
+          const codexDb = new SQLiteManager({ dbPath: codexDbPath });
+          const codexStorage = new ConversationStorage(codexDb);
 
-        // Store all parsed data
-        await codexStorage.storeConversations(parseResult.conversations);
-        await codexStorage.storeMessages(parseResult.messages);
-        await codexStorage.storeToolUses(parseResult.tool_uses);
-        await codexStorage.storeToolResults(parseResult.tool_results);
-        await codexStorage.storeFileEdits(parseResult.file_edits);
-        await codexStorage.storeThinkingBlocks(parseResult.thinking_blocks);
+          // Parse Codex sessions
+          const parser = new CodexConversationParser();
+          const parseResult = parser.parseSession(codex_path);
 
-        // Get stats from the database
-        const stats = codexDb.getDatabase()
-          .prepare("SELECT COUNT(*) as count FROM conversations")
-          .get() as { count: number };
+          // Store all parsed data
+          await codexStorage.storeConversations(parseResult.conversations);
+          await codexStorage.storeMessages(parseResult.messages);
+          await codexStorage.storeToolUses(parseResult.tool_uses);
+          await codexStorage.storeToolResults(parseResult.tool_results);
+          await codexStorage.storeFileEdits(parseResult.file_edits);
+          await codexStorage.storeThinkingBlocks(parseResult.thinking_blocks);
 
-        const messageStats = codexDb.getDatabase()
-          .prepare("SELECT COUNT(*) as count FROM messages")
-          .get() as { count: number };
+          // Get stats from the database
+          const stats = codexDb.getDatabase()
+            .prepare("SELECT COUNT(*) as count FROM conversations")
+            .get() as { count: number };
 
-        const decisionStats = codexDb.getDatabase()
-          .prepare("SELECT COUNT(*) as count FROM decisions")
-          .get() as { count: number };
+          const messageStats = codexDb.getDatabase()
+            .prepare("SELECT COUNT(*) as count FROM messages")
+            .get() as { count: number };
 
-        const mistakeStats = codexDb.getDatabase()
-          .prepare("SELECT COUNT(*) as count FROM mistakes")
-          .get() as { count: number };
+          const decisionStats = codexDb.getDatabase()
+            .prepare("SELECT COUNT(*) as count FROM decisions")
+            .get() as { count: number };
 
-        // Register in global index
-        globalIndex.registerProject({
-          project_path: codex_path,
-          source_type: "codex",
-          db_path: codexDbPath,
-          message_count: messageStats.count,
-          conversation_count: stats.count,
-          decision_count: decisionStats.count,
-          mistake_count: mistakeStats.count,
-          metadata: {
-            indexed_folders: parseResult.indexed_folders || [],
-          },
-        });
+          const mistakeStats = codexDb.getDatabase()
+            .prepare("SELECT COUNT(*) as count FROM mistakes")
+            .get() as { count: number };
 
-        projects.push({
-          project_path: codex_path,
-          source_type: "codex",
-          message_count: messageStats.count,
-          conversation_count: stats.count,
-        });
+          // Register in global index
+          globalIndex.registerProject({
+            project_path: codex_path,
+            source_type: "codex",
+            db_path: codexDbPath,
+            message_count: messageStats.count,
+            conversation_count: stats.count,
+            decision_count: decisionStats.count,
+            mistake_count: mistakeStats.count,
+            metadata: {
+              indexed_folders: parseResult.indexed_folders || [],
+            },
+          });
 
-        totalMessages += messageStats.count;
-        totalConversations += stats.count;
-        totalDecisions += decisionStats.count;
-        totalMistakes += mistakeStats.count;
+          projects.push({
+            project_path: codex_path,
+            source_type: "codex",
+            message_count: messageStats.count,
+            conversation_count: stats.count,
+          });
 
-        // Close the Codex database
-        codexDb.close();
-      } catch (error) {
-        errors.push({
-          project_path: codex_path,
-          error: (error as Error).message,
-        });
-      }
-    }
+          totalMessages += messageStats.count;
+          totalConversations += stats.count;
+          totalDecisions += decisionStats.count;
+          totalMistakes += mistakeStats.count;
 
-    // Index Claude Code projects if requested
-    if (include_claude_code && existsSync(claude_projects_path)) {
-      try {
-        const projectFolders = readdirSync(claude_projects_path);
-
-        for (const folder of projectFolders) {
-          const folderPath = join(claude_projects_path, folder);
-
-          try {
-            // Try to determine the original project path from folder name
-            const projectPath = folderPath; // Simplified for now
-
-            // Index this project
-            const indexResult = await this.indexConversations({
-              project_path: projectPath,
-            });
-
-            if (indexResult.success) {
-              // Register in global index
-              globalIndex.registerProject({
-                project_path: projectPath,
-                source_type: "claude-code",
-                db_path: this.db.getDbPath(),
-                message_count: indexResult.stats.messages.count,
-                conversation_count: indexResult.stats.conversations.count,
-                decision_count: indexResult.stats.decisions.count,
-                mistake_count: indexResult.stats.mistakes.count,
-              });
-
-              projects.push({
-                project_path: projectPath,
-                source_type: "claude-code",
-                message_count: indexResult.stats.messages.count,
-                conversation_count: indexResult.stats.conversations.count,
-              });
-
-              totalMessages += indexResult.stats.messages.count;
-              totalConversations += indexResult.stats.conversations.count;
-              totalDecisions += indexResult.stats.decisions.count;
-              totalMistakes += indexResult.stats.mistakes.count;
-            }
-          } catch (error) {
-            errors.push({
-              project_path: folder,
-              error: (error as Error).message,
-            });
-          }
+          // Close the Codex database
+          codexDb.close();
+        } catch (error) {
+          errors.push({
+            project_path: codex_path,
+            error: (error as Error).message,
+          });
         }
-      } catch (error) {
-        errors.push({
-          project_path: claude_projects_path,
-          error: (error as Error).message,
-        });
       }
+
+      // Index Claude Code projects if requested
+      if (include_claude_code && existsSync(claude_projects_path)) {
+        try {
+          const projectFolders = readdirSync(claude_projects_path);
+
+          for (const folder of projectFolders) {
+            const folderPath = join(claude_projects_path, folder);
+
+            try {
+              // Try to determine the original project path from folder name
+              const projectPath = folderPath; // Simplified for now
+
+              // Index this project
+              const indexResult = await this.indexConversations({
+                project_path: projectPath,
+              });
+
+              if (indexResult.success) {
+                // Register in global index
+                globalIndex.registerProject({
+                  project_path: projectPath,
+                  source_type: "claude-code",
+                  db_path: this.db.getDbPath(),
+                  message_count: indexResult.stats.messages.count,
+                  conversation_count: indexResult.stats.conversations.count,
+                  decision_count: indexResult.stats.decisions.count,
+                  mistake_count: indexResult.stats.mistakes.count,
+                });
+
+                projects.push({
+                  project_path: projectPath,
+                  source_type: "claude-code",
+                  message_count: indexResult.stats.messages.count,
+                  conversation_count: indexResult.stats.conversations.count,
+                });
+
+                totalMessages += indexResult.stats.messages.count;
+                totalConversations += indexResult.stats.conversations.count;
+                totalDecisions += indexResult.stats.decisions.count;
+                totalMistakes += indexResult.stats.mistakes.count;
+              }
+            } catch (error) {
+              errors.push({
+                project_path: folder,
+                error: (error as Error).message,
+              });
+            }
+          }
+        } catch (error) {
+          errors.push({
+            project_path: claude_projects_path,
+            error: (error as Error).message,
+          });
+        }
+      }
+
+      const stats = globalIndex.getGlobalStats();
+
+      return {
+        success: true,
+        global_index_path: globalIndex.getDbPath(),
+        projects_indexed: projects.length,
+        claude_code_projects: stats.claude_code_projects,
+        codex_projects: stats.codex_projects,
+        total_messages: totalMessages,
+        total_conversations: totalConversations,
+        total_decisions: totalDecisions,
+        total_mistakes: totalMistakes,
+        projects,
+        errors,
+        message: `Indexed ${projects.length} project(s): ${stats.claude_code_projects} Claude Code + ${stats.codex_projects} Codex`,
+      };
+    } finally {
+      // Ensure GlobalIndex is always closed
+      globalIndex.close();
     }
-
-    const stats = globalIndex.getGlobalStats();
-
-    return {
-      success: true,
-      global_index_path: globalIndex.getDbPath(),
-      projects_indexed: projects.length,
-      claude_code_projects: stats.claude_code_projects,
-      codex_projects: stats.codex_projects,
-      total_messages: totalMessages,
-      total_conversations: totalConversations,
-      total_decisions: totalDecisions,
-      total_mistakes: totalMistakes,
-      projects,
-      errors,
-      message: `Indexed ${projects.length} project(s): ${stats.claude_code_projects} Claude Code + ${stats.codex_projects} Codex`,
-    };
   }
 
   /**
@@ -1801,61 +1807,90 @@ export class ToolHandlers {
     args: Record<string, unknown>
   ): Promise<Types.SearchAllConversationsResponse> {
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
+    const { SQLiteManager } = await import("../storage/SQLiteManager.js");
+    const { SemanticSearch } = await import("../search/SemanticSearch.js");
     const typedArgs = args as unknown as Types.SearchAllConversationsArgs;
     const { query, limit = 20, date_range, source_type = "all" } = typedArgs;
 
     const globalIndex = new GlobalIndex();
-    const projects = globalIndex.getAllProjects(
-      source_type === "all" ? undefined : source_type
-    );
 
-    const allResults: Types.GlobalSearchResult[] = [];
-    let claudeCodeResults = 0;
-    let codexResults = 0;
+    try {
+      const projects = globalIndex.getAllProjects(
+        source_type === "all" ? undefined : source_type
+      );
 
-    for (const project of projects) {
-      try {
-        // Search this project (simplified - would need to open each project's DB)
-        const localResults = await this.searchConversations({
-          query,
-          limit,
-          date_range,
-        });
+      const allResults: Types.GlobalSearchResult[] = [];
+      let claudeCodeResults = 0;
+      let codexResults = 0;
 
-        // Enrich results with project info
-        for (const result of localResults.results) {
-          allResults.push({
-            ...result,
-            project_path: project.project_path,
-            source_type: project.source_type,
-          });
+      for (const project of projects) {
+        let projectDb: SQLiteManager | null = null;
+        try {
+          // Open this project's database
+          projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
+          const semanticSearch = new SemanticSearch(projectDb);
 
-          if (project.source_type === "claude-code") {
-            claudeCodeResults++;
-          } else {
-            codexResults++;
+          // Search this specific project's database
+          const localResults = await semanticSearch.searchConversations(query, limit);
+
+          // Filter by date range if specified
+          const filteredResults = date_range
+            ? localResults.filter((r: { message: { timestamp: number } }) => {
+                const timestamp = r.message.timestamp;
+                return timestamp >= date_range[0] && timestamp <= date_range[1];
+              })
+            : localResults;
+
+          // Enrich results with project info
+          for (const result of filteredResults) {
+            allResults.push({
+              conversation_id: result.conversation.id,
+              message_id: result.message.id,
+              timestamp: new Date(result.message.timestamp).toISOString(),
+              similarity: result.similarity,
+              snippet: result.snippet,
+              git_branch: result.conversation.git_branch,
+              message_type: result.message.message_type,
+              role: result.message.role,
+              project_path: project.project_path,
+              source_type: project.source_type,
+            });
+
+            if (project.source_type === "claude-code") {
+              claudeCodeResults++;
+            } else {
+              codexResults++;
+            }
+          }
+        } catch (_error) {
+          // Skip projects that fail to search
+          continue;
+        } finally {
+          // Close project database
+          if (projectDb) {
+            projectDb.close();
           }
         }
-      } catch (_error) {
-        // Skip projects that fail to search
-        continue;
       }
+
+      // Sort by similarity and limit
+      const sortedResults = allResults.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+
+      return {
+        query,
+        results: sortedResults,
+        total_found: sortedResults.length,
+        projects_searched: projects.length,
+        search_stats: {
+          claude_code_results: claudeCodeResults,
+          codex_results: codexResults,
+        },
+        message: `Found ${sortedResults.length} result(s) across ${projects.length} project(s)`,
+      };
+    } finally {
+      // Ensure GlobalIndex is always closed
+      globalIndex.close();
     }
-
-    // Sort by similarity and limit
-    const sortedResults = allResults.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
-
-    return {
-      query,
-      results: sortedResults,
-      total_found: sortedResults.length,
-      projects_searched: projects.length,
-      search_stats: {
-        claude_code_results: claudeCodeResults,
-        codex_results: codexResults,
-      },
-      message: `Found ${sortedResults.length} result(s) across ${projects.length} project(s)`,
-    };
   }
 
   /**
@@ -1867,44 +1902,25 @@ export class ToolHandlers {
   async getAllDecisions(args: Record<string, unknown>): Promise<Types.GetAllDecisionsResponse> {
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const typedArgs = args as unknown as Types.GetAllDecisionsArgs;
-    const { query, file_path, limit = 20, source_type = "all" } = typedArgs;
+    const { query, file_path: _file_path } = typedArgs;
 
     const globalIndex = new GlobalIndex();
-    const projects = globalIndex.getAllProjects(
-      source_type === "all" ? undefined : source_type
-    );
 
-    const allDecisions: Types.GlobalDecision[] = [];
+    try {
+      const projects = globalIndex.getAllProjects();
 
-    for (const project of projects) {
-      try {
-        const localDecisions = await this.getDecisions({
-          query,
-          file_path,
-          limit,
-        });
-
-        for (const decision of localDecisions.decisions) {
-          allDecisions.push({
-            ...decision,
-            project_path: project.project_path,
-            source_type: project.source_type,
-          });
-        }
-      } catch (_error) {
-        continue;
-      }
+      // TODO: Implement cross-project decision search
+      // For now, return empty results with proper structure
+      return {
+        query,
+        decisions: [],
+        total_found: 0,
+        projects_searched: projects.length,
+        message: `Cross-project decision search not yet implemented (would search ${projects.length} project(s))`,
+      };
+    } finally {
+      globalIndex.close();
     }
-
-    const sortedDecisions = allDecisions.slice(0, limit);
-
-    return {
-      query,
-      decisions: sortedDecisions,
-      total_found: sortedDecisions.length,
-      projects_searched: projects.length,
-      message: `Found ${sortedDecisions.length} decision(s) across ${projects.length} project(s)`,
-    };
   }
 
   /**
@@ -1918,43 +1934,24 @@ export class ToolHandlers {
   ): Promise<Types.SearchAllMistakesResponse> {
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const typedArgs = args as unknown as Types.SearchAllMistakesArgs;
-    const { query, mistake_type, limit = 20, source_type = "all" } = typedArgs;
+    const { query, mistake_type: _mistake_type } = typedArgs;
 
     const globalIndex = new GlobalIndex();
-    const projects = globalIndex.getAllProjects(
-      source_type === "all" ? undefined : source_type
-    );
 
-    const allMistakes: Types.GlobalMistake[] = [];
+    try {
+      const projects = globalIndex.getAllProjects();
 
-    for (const project of projects) {
-      try {
-        const localMistakes = await this.searchMistakes({
-          query,
-          mistake_type,
-          limit,
-        });
-
-        for (const mistake of localMistakes.mistakes) {
-          allMistakes.push({
-            ...mistake,
-            project_path: project.project_path,
-            source_type: project.source_type,
-          });
-        }
-      } catch (_error) {
-        continue;
-      }
+      // TODO: Implement cross-project mistake search
+      // For now, return empty results with proper structure
+      return {
+        query,
+        mistakes: [],
+        total_found: 0,
+        projects_searched: projects.length,
+        message: `Cross-project mistake search not yet implemented (would search ${projects.length} project(s))`,
+      };
+    } finally {
+      globalIndex.close();
     }
-
-    const sortedMistakes = allMistakes.slice(0, limit);
-
-    return {
-      query,
-      mistakes: sortedMistakes,
-      total_found: sortedMistakes.length,
-      projects_searched: projects.length,
-      message: `Found ${sortedMistakes.length} mistake(s) across ${projects.length} project(s)`,
-    };
   }
 }

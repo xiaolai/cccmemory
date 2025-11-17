@@ -322,12 +322,12 @@ export class GlobalIndex {
         `
       SELECT
         COUNT(*) as total_projects,
-        SUM(CASE WHEN source_type = 'claude-code' THEN 1 ELSE 0 END) as claude_code_projects,
-        SUM(CASE WHEN source_type = 'codex' THEN 1 ELSE 0 END) as codex_projects,
-        SUM(message_count) as total_messages,
-        SUM(conversation_count) as total_conversations,
-        SUM(decision_count) as total_decisions,
-        SUM(mistake_count) as total_mistakes
+        COALESCE(SUM(CASE WHEN source_type = 'claude-code' THEN 1 ELSE 0 END), 0) as claude_code_projects,
+        COALESCE(SUM(CASE WHEN source_type = 'codex' THEN 1 ELSE 0 END), 0) as codex_projects,
+        COALESCE(SUM(message_count), 0) as total_messages,
+        COALESCE(SUM(conversation_count), 0) as total_conversations,
+        COALESCE(SUM(decision_count), 0) as total_decisions,
+        COALESCE(SUM(mistake_count), 0) as total_mistakes
       FROM project_metadata
     `
       )
