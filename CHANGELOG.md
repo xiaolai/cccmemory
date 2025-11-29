@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.7] - 2025-11-30
+
+### Fixed
+
+- **Read-Only Database Error in Cross-Project Search**
+  - Skip write-related PRAGMAs (WAL, synchronous, page_size, etc.) when opening databases in read-only mode
+  - Fixes "attempt to write a readonly database" error during `search_all_conversations`
+  - Read-only PRAGMAs (cache_size, temp_store, mmap_size, foreign_keys) still applied for performance
+
 ## [1.5.6] - 2025-11-30
 
 ### Fixed
