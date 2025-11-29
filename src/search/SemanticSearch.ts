@@ -124,41 +124,53 @@ export class SemanticSearch {
       return this.fallbackFullTextSearch(query, limit, filter);
     }
 
-    // Generate query embedding
-    const queryEmbedding = await embedder.embed(query);
+    try {
+      // Generate query embedding
+      const queryEmbedding = await embedder.embed(query);
 
-    // Search vector store
-    const vectorResults = await this.vectorStore.searchMessages(
-      queryEmbedding,
-      limit * 2 // Get more results for filtering
-    );
+      // Search vector store
+      const vectorResults = await this.vectorStore.searchMessages(
+        queryEmbedding,
+        limit * 2 // Get more results for filtering
+      );
 
-    // Enrich with message and conversation data
-    const enrichedResults: SearchResult[] = [];
+      // Enrich with message and conversation data
+      const enrichedResults: SearchResult[] = [];
 
-    for (const vecResult of vectorResults) {
-      const message = this.getMessage(vecResult.id);
-      if (!message) {continue;}
+      for (const vecResult of vectorResults) {
+        const message = this.getMessage(vecResult.id);
+        if (!message) {continue;}
 
-      // Apply filters
-      if (filter) {
-        if (!this.applyFilter(message, filter)) {continue;}
+        // Apply filters
+        if (filter) {
+          if (!this.applyFilter(message, filter)) {continue;}
+        }
+
+        const conversation = this.getConversation(message.conversation_id);
+        if (!conversation) {continue;}
+
+        enrichedResults.push({
+          message,
+          conversation,
+          similarity: vecResult.similarity,
+          snippet: this.generateSnippet(vecResult.content, query),
+        });
+
+        if (enrichedResults.length >= limit) {break;}
       }
 
-      const conversation = this.getConversation(message.conversation_id);
-      if (!conversation) {continue;}
+      // Fall back to FTS if vector search returned no results
+      if (enrichedResults.length === 0) {
+        console.warn("Vector search returned no results - falling back to FTS");
+        return this.fallbackFullTextSearch(query, limit, filter);
+      }
 
-      enrichedResults.push({
-        message,
-        conversation,
-        similarity: vecResult.similarity,
-        snippet: this.generateSnippet(vecResult.content, query),
-      });
-
-      if (enrichedResults.length >= limit) {break;}
+      return enrichedResults;
+    } catch (error) {
+      // If embedding fails, fall back to FTS
+      console.warn("Embedding error, falling back to FTS:", (error as Error).message);
+      return this.fallbackFullTextSearch(query, limit, filter);
     }
-
-    return enrichedResults;
   }
 
   /**
