@@ -23,14 +23,48 @@ export const migrations: Migration[] = [
       -- This migration just records the version
     `,
   },
-  // Future migrations will be added here
-  // Example:
-  // {
-  //   version: 2,
-  //   description: "Add new column for X",
-  //   up: "ALTER TABLE conversations ADD COLUMN new_field TEXT",
-  //   down: "ALTER TABLE conversations DROP COLUMN new_field"
-  // }
+  {
+    version: 2,
+    description: "Add source_type column and global index support",
+    up: `
+      ALTER TABLE conversations ADD COLUMN source_type TEXT DEFAULT 'claude-code';
+      CREATE INDEX IF NOT EXISTS idx_conv_source ON conversations(source_type)
+    `,
+    down: `
+      -- SQLite doesn't support DROP COLUMN, would need table recreation
+    `,
+  },
+  {
+    version: 3,
+    description:
+      "Fix messages_fts schema - remove non-existent context column",
+    up: `
+      -- FTS5 virtual tables can't be altered, must drop and recreate
+      -- The old schema had 'context' column which doesn't exist in messages table
+      DROP TABLE IF EXISTS messages_fts;
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        id UNINDEXED,
+        content,
+        metadata,
+        content=messages,
+        content_rowid=rowid
+      );
+      -- Rebuild FTS index from messages table
+      INSERT INTO messages_fts(messages_fts) VALUES('rebuild')
+    `,
+    down: `
+      -- Rollback: recreate old (broken) schema
+      DROP TABLE IF EXISTS messages_fts;
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        id UNINDEXED,
+        content,
+        context,
+        metadata,
+        content=messages,
+        content_rowid=rowid
+      )
+    `,
+  },
 ];
 
 export class MigrationManager {

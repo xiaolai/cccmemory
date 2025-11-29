@@ -196,12 +196,12 @@ export class SQLiteManager {
         // SQLite can handle multiple statements in a single exec() call
         this.db.exec(schema);
 
-        // Record schema version (current version is 2)
+        // Record schema version (current version is 3)
         this.db
           .prepare(
             "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
           )
-          .run(2, Date.now(), "Initial schema with source_type support");
+          .run(3, Date.now(), "Initial schema with fixed FTS tables");
 
         console.log("Database schema initialized successfully");
       } else {
@@ -248,9 +248,60 @@ export class SQLiteManager {
           )
           .run(2, Date.now(), "Add source_type column and global index support");
 
-        console.log("Migration applied successfully");
+        console.log("Migration v2 applied successfully");
       } catch (error) {
-        console.error("Error applying migration:", error);
+        console.error("Error applying migration v2:", error);
+        throw error;
+      }
+    }
+
+    // Migration 2 -> 3: Fix messages_fts schema (remove non-existent context column)
+    if (currentVersion < 3) {
+      try {
+        console.log(
+          "Applying migration v3: Fixing messages_fts schema..."
+        );
+
+        // FTS5 virtual tables can't be altered, must drop and recreate
+        // The old schema had 'context' column which doesn't exist in messages table
+        this.db.exec("DROP TABLE IF EXISTS messages_fts");
+        this.db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            id UNINDEXED,
+            content,
+            metadata,
+            content=messages,
+            content_rowid=rowid
+          )
+        `);
+
+        // Rebuild FTS index from messages table
+        try {
+          this.db.exec(
+            "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')"
+          );
+          console.log("FTS index rebuilt successfully");
+        } catch (ftsError) {
+          console.warn(
+            "FTS rebuild warning:",
+            (ftsError as Error).message
+          );
+        }
+
+        // Record migration
+        this.db
+          .prepare(
+            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
+          )
+          .run(
+            3,
+            Date.now(),
+            "Fix messages_fts schema - remove context column"
+          );
+
+        console.log("Migration v3 applied successfully");
+      } catch (error) {
+        console.error("Error applying migration v3:", error);
         throw error;
       }
     }

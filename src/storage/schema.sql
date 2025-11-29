@@ -275,10 +275,10 @@ CREATE TABLE IF NOT EXISTS decision_embeddings (
 CREATE INDEX IF NOT EXISTS idx_dec_embed ON decision_embeddings(decision_id);
 
 -- Table 16: Full-Text Search Index for Messages
+-- NOTE: Column names must match the messages table exactly for external content mode
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   id UNINDEXED,
   content,
-  context,
   metadata,
   content=messages,
   content_rowid=rowid
