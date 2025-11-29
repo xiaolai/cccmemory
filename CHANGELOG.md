@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2025-01-29
+
+### Fixed
+
+- **Critical Bug: FTS Tables Never Populated**
+  - FTS5 external content tables require explicit rebuild after inserts
+  - Added `rebuildMessagesFts()` and `rebuildDecisionsFts()` methods
+  - Full-text search fallback now works correctly when embeddings unavailable
+
+- **Critical Bug: Only 0.3% of Messages Had Embeddings**
+  - Added SemanticSearch indexing to `indexAllProjects()`
+  - Now generates embeddings for both Codex and Claude Code projects
+  - Semantic search now works across all indexed conversations
+
+- **Critical Bug: Singleton Database Path Problem**
+  - `indexAllProjects()` now creates separate SQLiteManager per project
+  - Each Claude Code project gets its own database file
+  - Proper project isolation matching Codex behavior
+
+### Added
+
+- `parseFromFolder()` method in ConversationParser for direct folder parsing
+
 ## [1.5.1] - 2025-01-24
 
 ### Fixed
