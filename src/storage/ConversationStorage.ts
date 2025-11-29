@@ -280,7 +280,25 @@ export class ConversationStorage {
       }
     });
 
+    // Rebuild FTS index for full-text search
+    // FTS5 with external content requires explicit rebuild after inserts
+    this.rebuildMessagesFts();
+
     console.log(`✓ Stored ${messages.length} messages`);
+  }
+
+  /**
+   * Rebuild the messages FTS index.
+   * Required for FTS5 external content tables after inserting data.
+   */
+  private rebuildMessagesFts(): void {
+    try {
+      this.db.getDatabase().exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
+    } catch (error) {
+      // FTS rebuild may fail if table doesn't exist or schema mismatch
+      // Log but don't throw - FTS is optional fallback
+      console.warn("FTS rebuild warning:", (error as Error).message);
+    }
   }
 
   // ==================== Tool Uses ====================
@@ -490,7 +508,25 @@ export class ConversationStorage {
       }
     });
 
+    // Rebuild FTS index for full-text search
+    // FTS5 with external content requires explicit rebuild after inserts
+    this.rebuildDecisionsFts();
+
     console.log(`✓ Stored ${decisions.length} decisions`);
+  }
+
+  /**
+   * Rebuild the decisions FTS index.
+   * Required for FTS5 external content tables after inserting data.
+   */
+  private rebuildDecisionsFts(): void {
+    try {
+      this.db.getDatabase().exec("INSERT INTO decisions_fts(decisions_fts) VALUES('rebuild')");
+    } catch (error) {
+      // FTS rebuild may fail if table doesn't exist or schema mismatch
+      // Log but don't throw - FTS is optional fallback
+      console.warn("FTS decisions rebuild warning:", (error as Error).message);
+    }
   }
 
   /**

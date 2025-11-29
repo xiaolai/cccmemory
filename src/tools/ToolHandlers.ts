@@ -1851,6 +1851,9 @@ export class ToolHandlers {
           const { CodexConversationParser } = await import("../parsers/CodexConversationParser.js");
           const { SQLiteManager } = await import("../storage/SQLiteManager.js");
           const { ConversationStorage } = await import("../storage/ConversationStorage.js");
+          const { SemanticSearch } = await import("../search/SemanticSearch.js");
+          const { DecisionExtractor } = await import("../parsers/DecisionExtractor.js");
+          const { MistakeExtractor } = await import("../parsers/MistakeExtractor.js");
 
           // Create dedicated database for Codex
           const codexDbPath = join(codex_path, ".codex-conversations-memory.db");
@@ -1868,6 +1871,33 @@ export class ToolHandlers {
           await codexStorage.storeToolResults(parseResult.tool_results);
           await codexStorage.storeFileEdits(parseResult.file_edits);
           await codexStorage.storeThinkingBlocks(parseResult.thinking_blocks);
+
+          // Extract and store decisions
+          const decisionExtractor = new DecisionExtractor();
+          const decisions = decisionExtractor.extractDecisions(
+            parseResult.messages,
+            parseResult.thinking_blocks
+          );
+          await codexStorage.storeDecisions(decisions);
+
+          // Extract and store mistakes
+          const mistakeExtractor = new MistakeExtractor();
+          const mistakes = mistakeExtractor.extractMistakes(
+            parseResult.messages,
+            parseResult.tool_results
+          );
+          await codexStorage.storeMistakes(mistakes);
+
+          // Generate embeddings for semantic search
+          try {
+            const semanticSearch = new SemanticSearch(codexDb);
+            await semanticSearch.indexMessages(parseResult.messages);
+            await semanticSearch.indexDecisions(decisions);
+            console.log(`✓ Generated embeddings for Codex project`);
+          } catch (embedError) {
+            console.warn("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
+            console.warn("   FTS fallback will be used for search");
+          }
 
           // Get stats from the database
           const stats = codexDb.getDatabase()
@@ -1925,44 +1955,117 @@ export class ToolHandlers {
       // Index Claude Code projects if requested
       if (include_claude_code && existsSync(claude_projects_path)) {
         try {
+          const { SQLiteManager } = await import("../storage/SQLiteManager.js");
+          const { ConversationStorage } = await import("../storage/ConversationStorage.js");
+          const { ConversationParser } = await import("../parsers/ConversationParser.js");
+          const { DecisionExtractor } = await import("../parsers/DecisionExtractor.js");
+          const { MistakeExtractor } = await import("../parsers/MistakeExtractor.js");
+          const { statSync } = await import("fs");
+
           const projectFolders = readdirSync(claude_projects_path);
 
           for (const folder of projectFolders) {
             const folderPath = join(claude_projects_path, folder);
 
             try {
-              // Try to determine the original project path from folder name
-              const projectPath = folderPath; // Simplified for now
+              // Skip if not a directory
+              if (!statSync(folderPath).isDirectory()) {
+                continue;
+              }
 
-              // Index this project
-              const indexResult = await this.indexConversations({
-                project_path: projectPath,
+              // Create dedicated database for this Claude Code project
+              const projectDbPath = join(folderPath, ".claude-conversations-memory.db");
+              const projectDb = new SQLiteManager({ dbPath: projectDbPath });
+              const projectStorage = new ConversationStorage(projectDb);
+
+              // Parse Claude Code conversations directly from this folder
+              const parser = new ConversationParser();
+              const parseResult = parser.parseFromFolder(folderPath);
+
+              // Skip empty projects
+              if (parseResult.messages.length === 0) {
+                projectDb.close();
+                continue;
+              }
+
+              // Store all parsed data
+              await projectStorage.storeConversations(parseResult.conversations);
+              await projectStorage.storeMessages(parseResult.messages);
+              await projectStorage.storeToolUses(parseResult.tool_uses);
+              await projectStorage.storeToolResults(parseResult.tool_results);
+              await projectStorage.storeFileEdits(parseResult.file_edits);
+              await projectStorage.storeThinkingBlocks(parseResult.thinking_blocks);
+
+              // Extract and store decisions
+              const decisionExtractor = new DecisionExtractor();
+              const decisions = decisionExtractor.extractDecisions(
+                parseResult.messages,
+                parseResult.thinking_blocks
+              );
+              await projectStorage.storeDecisions(decisions);
+
+              // Extract and store mistakes
+              const mistakeExtractor = new MistakeExtractor();
+              const mistakes = mistakeExtractor.extractMistakes(
+                parseResult.messages,
+                parseResult.tool_results
+              );
+              await projectStorage.storeMistakes(mistakes);
+
+              // Generate embeddings for semantic search
+              try {
+                const { SemanticSearch } = await import("../search/SemanticSearch.js");
+                const semanticSearch = new SemanticSearch(projectDb);
+                await semanticSearch.indexMessages(parseResult.messages);
+                await semanticSearch.indexDecisions(decisions);
+                console.log(`✓ Generated embeddings for project: ${folder}`);
+              } catch (embedError) {
+                console.warn(`⚠️ Embedding generation failed for ${folder}:`, (embedError as Error).message);
+                console.warn("   FTS fallback will be used for search");
+              }
+
+              // Get stats from the database
+              const stats = projectDb.getDatabase()
+                .prepare("SELECT COUNT(*) as count FROM conversations")
+                .get() as { count: number };
+
+              const messageStats = projectDb.getDatabase()
+                .prepare("SELECT COUNT(*) as count FROM messages")
+                .get() as { count: number };
+
+              const decisionStats = projectDb.getDatabase()
+                .prepare("SELECT COUNT(*) as count FROM decisions")
+                .get() as { count: number };
+
+              const mistakeStats = projectDb.getDatabase()
+                .prepare("SELECT COUNT(*) as count FROM mistakes")
+                .get() as { count: number };
+
+              // Register in global index with the project-specific database path
+              globalIndex.registerProject({
+                project_path: folderPath,
+                source_type: "claude-code",
+                db_path: projectDbPath,
+                message_count: messageStats.count,
+                conversation_count: stats.count,
+                decision_count: decisionStats.count,
+                mistake_count: mistakeStats.count,
               });
 
-              if (indexResult.success) {
-                // Register in global index
-                globalIndex.registerProject({
-                  project_path: projectPath,
-                  source_type: "claude-code",
-                  db_path: this.db.getDbPath(),
-                  message_count: indexResult.stats.messages.count,
-                  conversation_count: indexResult.stats.conversations.count,
-                  decision_count: indexResult.stats.decisions.count,
-                  mistake_count: indexResult.stats.mistakes.count,
-                });
+              projects.push({
+                project_path: folderPath,
+                source_type: "claude-code",
+                message_count: messageStats.count,
+                conversation_count: stats.count,
+              });
 
-                projects.push({
-                  project_path: projectPath,
-                  source_type: "claude-code",
-                  message_count: indexResult.stats.messages.count,
-                  conversation_count: indexResult.stats.conversations.count,
-                });
+              totalMessages += messageStats.count;
+              totalConversations += stats.count;
+              totalDecisions += decisionStats.count;
+              totalMistakes += mistakeStats.count;
 
-                totalMessages += indexResult.stats.messages.count;
-                totalConversations += indexResult.stats.conversations.count;
-                totalDecisions += indexResult.stats.decisions.count;
-                totalMistakes += indexResult.stats.mistakes.count;
-              }
+              // Close the project database
+              projectDb.close();
             } catch (error) {
               errors.push({
                 project_path: folder,

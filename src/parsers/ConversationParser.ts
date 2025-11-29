@@ -312,6 +312,59 @@ export class ConversationParser {
   }
 
   /**
+   * Parse conversations directly from a Claude projects folder.
+   *
+   * This method is used when you already have the path to the conversation
+   * folder (e.g., ~/.claude/projects/-Users-me-my-project) rather than
+   * a project path that needs to be converted.
+   *
+   * @param folderPath - Absolute path to the Claude projects folder
+   * @param projectIdentifier - Optional identifier to use as project_path in records (defaults to folder path)
+   * @returns ParseResult containing all extracted entities
+   *
+   * @example
+   * ```typescript
+   * const parser = new ConversationParser();
+   * const result = parser.parseFromFolder('~/.claude/projects/-Users-me-my-project');
+   * ```
+   */
+  parseFromFolder(folderPath: string, projectIdentifier?: string): ParseResult {
+    const result: ParseResult = {
+      conversations: [],
+      messages: [],
+      tool_uses: [],
+      tool_results: [],
+      file_edits: [],
+      thinking_blocks: [],
+      indexed_folders: [folderPath],
+    };
+
+    // Use folder path as project identifier if not provided
+    const projectPath = projectIdentifier || folderPath;
+
+    if (!existsSync(folderPath)) {
+      console.warn(`⚠️ Folder does not exist: ${folderPath}`);
+      return result;
+    }
+
+    // Get all .jsonl files in the folder
+    const files = readdirSync(folderPath).filter((f) => f.endsWith(".jsonl"));
+    console.log(`Found ${files.length} conversation file(s) in ${folderPath}`);
+
+    // Parse each file
+    for (const file of files) {
+      const filePath = join(folderPath, file);
+      this.parseFile(filePath, result, projectPath);
+    }
+
+    console.log(
+      `Parsed ${result.conversations.length} conversations, ${result.messages.length} messages`
+    );
+
+    return result;
+  }
+
+  /**
    * Parse a single .jsonl file
    */
   private parseFile(
