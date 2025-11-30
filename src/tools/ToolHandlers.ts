@@ -1905,8 +1905,8 @@ export class ToolHandlers {
           // Generate embeddings for semantic search
           try {
             const semanticSearch = new SemanticSearch(codexDb);
-            await semanticSearch.indexMessages(parseResult.messages);
-            await semanticSearch.indexDecisions(decisions);
+            await semanticSearch.indexMessages(parseResult.messages, incremental);
+            await semanticSearch.indexDecisions(decisions, incremental);
             console.log(`✓ Generated embeddings for Codex project`);
           } catch (embedError) {
             console.warn("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
@@ -2039,8 +2039,8 @@ export class ToolHandlers {
               try {
                 const { SemanticSearch } = await import("../search/SemanticSearch.js");
                 const semanticSearch = new SemanticSearch(projectDb);
-                await semanticSearch.indexMessages(parseResult.messages);
-                await semanticSearch.indexDecisions(decisions);
+                await semanticSearch.indexMessages(parseResult.messages, incremental);
+                await semanticSearch.indexDecisions(decisions, incremental);
                 console.log(`✓ Generated embeddings for project: ${folder}`);
               } catch (embedError) {
                 console.warn(`⚠️ Embedding generation failed for ${folder}:`, (embedError as Error).message);

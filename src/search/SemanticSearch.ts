@@ -41,8 +41,10 @@ export class SemanticSearch {
 
   /**
    * Index all messages for semantic search
+   * @param messages - Messages to index
+   * @param incremental - If true, skip messages that already have embeddings (default: false for full refresh)
    */
-  async indexMessages(messages: Message[]): Promise<void> {
+  async indexMessages(messages: Message[], incremental: boolean = false): Promise<void> {
     console.log(`Indexing ${messages.length} messages...`);
 
     const embedder = await getEmbeddingGenerator();
@@ -57,19 +59,22 @@ export class SemanticSearch {
       (m): m is Message & { content: string } => !!m.content && m.content.trim().length > 0
     );
 
-    // Skip messages that already have embeddings (incremental optimization)
-    const existingIds = this.vectorStore.getExistingMessageEmbeddingIds();
-    const messagesToIndex = messagesWithContent.filter((m) => !existingIds.has(m.id));
+    // In incremental mode, skip messages that already have embeddings
+    let messagesToIndex = messagesWithContent;
+    if (incremental) {
+      const existingIds = this.vectorStore.getExistingMessageEmbeddingIds();
+      messagesToIndex = messagesWithContent.filter((m) => !existingIds.has(m.id));
 
-    if (messagesToIndex.length === 0) {
-      console.log(`⏭ All ${messagesWithContent.length} messages already have embeddings`);
-      return;
-    }
+      if (messagesToIndex.length === 0) {
+        console.log(`⏭ All ${messagesWithContent.length} messages already have embeddings`);
+        return;
+      }
 
-    if (existingIds.size > 0) {
-      console.log(`⏭ Skipping ${messagesWithContent.length - messagesToIndex.length} already-embedded messages`);
+      if (existingIds.size > 0) {
+        console.log(`⏭ Skipping ${messagesWithContent.length - messagesToIndex.length} already-embedded messages`);
+      }
     }
-    console.log(`Generating embeddings for ${messagesToIndex.length} new messages...`);
+    console.log(`Generating embeddings for ${messagesToIndex.length} ${incremental ? "new " : ""}messages...`);
 
     // Generate embeddings in batches
     const texts = messagesToIndex.map((m) => m.content);
@@ -89,8 +94,10 @@ export class SemanticSearch {
 
   /**
    * Index decisions for semantic search
+   * @param decisions - Decisions to index
+   * @param incremental - If true, skip decisions that already have embeddings (default: false for full refresh)
    */
-  async indexDecisions(decisions: Decision[]): Promise<void> {
+  async indexDecisions(decisions: Decision[], incremental: boolean = false): Promise<void> {
     console.log(`Indexing ${decisions.length} decisions...`);
 
     const embedder = await getEmbeddingGenerator();
@@ -100,19 +107,22 @@ export class SemanticSearch {
       return;
     }
 
-    // Skip decisions that already have embeddings (incremental optimization)
-    const existingIds = this.vectorStore.getExistingDecisionEmbeddingIds();
-    const decisionsToIndex = decisions.filter((d) => !existingIds.has(d.id));
+    // In incremental mode, skip decisions that already have embeddings
+    let decisionsToIndex = decisions;
+    if (incremental) {
+      const existingIds = this.vectorStore.getExistingDecisionEmbeddingIds();
+      decisionsToIndex = decisions.filter((d) => !existingIds.has(d.id));
 
-    if (decisionsToIndex.length === 0) {
-      console.log(`⏭ All ${decisions.length} decisions already have embeddings`);
-      return;
-    }
+      if (decisionsToIndex.length === 0) {
+        console.log(`⏭ All ${decisions.length} decisions already have embeddings`);
+        return;
+      }
 
-    if (existingIds.size > 0) {
-      console.log(`⏭ Skipping ${decisions.length - decisionsToIndex.length} already-embedded decisions`);
+      if (existingIds.size > 0) {
+        console.log(`⏭ Skipping ${decisions.length - decisionsToIndex.length} already-embedded decisions`);
+      }
     }
-    console.log(`Generating embeddings for ${decisionsToIndex.length} new decisions...`);
+    console.log(`Generating embeddings for ${decisionsToIndex.length} ${incremental ? "new " : ""}decisions...`);
 
     // Generate embeddings for decision text + rationale
     const texts = decisionsToIndex.map((d) => {

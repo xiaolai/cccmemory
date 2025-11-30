@@ -49,10 +49,13 @@ export class VectorStore {
   }
 
   /**
-   * Get set of message IDs that already have embeddings
+   * Get set of message IDs that already have embeddings.
+   * Queries both BLOB fallback table and sqlite-vec table.
    */
   getExistingMessageEmbeddingIds(): Set<string> {
     const ids = new Set<string>();
+
+    // Query BLOB fallback table (always exists)
     try {
       const rows = this.db
         .prepare("SELECT message_id FROM message_embeddings")
@@ -63,14 +66,36 @@ export class VectorStore {
     } catch (_e) {
       // Table might not exist yet
     }
+
+    // Also query sqlite-vec table if extension is available
+    // Vec table stores IDs as "msg_<messageId>", so we strip the prefix
+    if (this.hasVecExtension) {
+      try {
+        const vecRows = this.db
+          .prepare("SELECT id FROM vec_message_embeddings")
+          .all() as Array<{ id: string }>;
+        for (const row of vecRows) {
+          // Strip "msg_" prefix to get actual message ID
+          if (row.id.startsWith("msg_")) {
+            ids.add(row.id.substring(4));
+          }
+        }
+      } catch (_e) {
+        // Vec table might not exist yet
+      }
+    }
+
     return ids;
   }
 
   /**
-   * Get set of decision IDs that already have embeddings
+   * Get set of decision IDs that already have embeddings.
+   * Queries both BLOB fallback table and sqlite-vec table.
    */
   getExistingDecisionEmbeddingIds(): Set<string> {
     const ids = new Set<string>();
+
+    // Query BLOB fallback table
     try {
       const rows = this.db
         .prepare("SELECT decision_id FROM decision_embeddings")
@@ -81,6 +106,25 @@ export class VectorStore {
     } catch (_e) {
       // Table might not exist yet
     }
+
+    // Also query sqlite-vec table if extension is available
+    // Vec table stores IDs as "dec_<decisionId>", so we strip the prefix
+    if (this.hasVecExtension) {
+      try {
+        const vecRows = this.db
+          .prepare("SELECT id FROM vec_decision_embeddings")
+          .all() as Array<{ id: string }>;
+        for (const row of vecRows) {
+          // Strip "dec_" prefix to get actual decision ID
+          if (row.id.startsWith("dec_")) {
+            ids.add(row.id.substring(4));
+          }
+        }
+      } catch (_e) {
+        // Vec table might not exist yet
+      }
+    }
+
     return ids;
   }
 
