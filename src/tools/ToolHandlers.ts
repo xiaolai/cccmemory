@@ -1831,7 +1831,7 @@ export class ToolHandlers {
       include_claude_code = true,
       codex_path = join(homedir(), ".codex"),
       claude_projects_path = join(homedir(), ".claude", "projects"),
-      incremental = false,
+      incremental = true,
     } = typedArgs;
 
     const globalIndex = new GlobalIndex();

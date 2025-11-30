@@ -527,8 +527,8 @@ export const TOOLS = {
         },
         incremental: {
           type: "boolean",
-          description: "Perform incremental indexing - only index files modified since last indexing (default: false). Set to true for faster re-indexing.",
-          default: false,
+          description: "Perform incremental indexing - only index files modified since last indexing (default: true). Set to false for full re-indexing.",
+          default: true,
         },
       },
     },

@@ -42,9 +42,9 @@ export class SemanticSearch {
   /**
    * Index all messages for semantic search
    * @param messages - Messages to index
-   * @param incremental - If true, skip messages that already have embeddings (default: false for full refresh)
+   * @param incremental - If true, skip messages that already have embeddings (default: true for fast re-indexing)
    */
-  async indexMessages(messages: Message[], incremental: boolean = false): Promise<void> {
+  async indexMessages(messages: Message[], incremental: boolean = true): Promise<void> {
     console.log(`Indexing ${messages.length} messages...`);
 
     const embedder = await getEmbeddingGenerator();
@@ -95,9 +95,9 @@ export class SemanticSearch {
   /**
    * Index decisions for semantic search
    * @param decisions - Decisions to index
-   * @param incremental - If true, skip decisions that already have embeddings (default: false for full refresh)
+   * @param incremental - If true, skip decisions that already have embeddings (default: true for fast re-indexing)
    */
-  async indexDecisions(decisions: Decision[], incremental: boolean = false): Promise<void> {
+  async indexDecisions(decisions: Decision[], incremental: boolean = true): Promise<void> {
     console.log(`Indexing ${decisions.length} decisions...`);
 
     const embedder = await getEmbeddingGenerator();
