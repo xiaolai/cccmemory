@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2025-11-30
+
+### Added
+
+- **Incremental Indexing Support**
+  - Add `incremental: true` parameter to `index_all_projects` tool
+  - Only index files modified since last indexing (checks file mtime vs `last_indexed`)
+  - Skip unchanged conversation files for near-instant re-indexing
+  - Skip already-embedded messages and decisions during embedding generation
+  - Works for both Claude Code and Codex projects
+
+### Performance
+
+- Re-indexing with no changes is now nearly instant
+- Embedding generation only runs for new messages/decisions
+- File parsing skips unchanged files completely
+
 ## [1.5.7] - 2025-11-30
 
 ### Fixed
