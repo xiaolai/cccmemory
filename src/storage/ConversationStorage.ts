@@ -170,9 +170,11 @@ export class ConversationStorage {
           conv.created_at,
           conv.updated_at
         );
-        // Invalidate cache for this conversation
+        // Invalidate cache for this conversation and related caches
         if (this.cache) {
           this.cache.delete(`conversation:${conv.id}`);
+          // Also clear timeline caches since conversations affect them
+          this.cache.clear(); // Full clear is safest for conversation updates
         }
       }
     });
@@ -215,9 +217,16 @@ export class ConversationStorage {
       return null;
     }
 
+    let metadata: Record<string, unknown> = {};
+    try {
+      metadata = JSON.parse(row.metadata || "{}");
+    } catch (_e) {
+      console.warn(`Invalid JSON in conversation ${id} metadata`);
+    }
+
     const result = {
       ...row,
-      metadata: JSON.parse(row.metadata || "{}"),
+      metadata,
     };
 
     // Cache the result

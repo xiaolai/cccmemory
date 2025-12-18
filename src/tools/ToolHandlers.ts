@@ -1897,7 +1897,8 @@ export class ToolHandlers {
     const typedArgs = args as Types.ForgetByTopicArgs;
     const keywords = typedArgs.keywords || [];
     const projectPath = typedArgs.project_path || process.cwd();
-    const confirm = typedArgs.confirm || false;
+    // SECURITY: Require strict boolean true to prevent truthy string coercion
+    const confirm = typedArgs.confirm === true;
 
     if (keywords.length === 0) {
       return {

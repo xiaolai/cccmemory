@@ -53,8 +53,15 @@ export class SQLiteManager {
 
     this.isReadOnly = config.readOnly || false;
 
-    // Ensure directory exists
-    this.ensureDirectoryExists();
+    // Ensure directory exists (only in write mode)
+    if (!this.isReadOnly) {
+      this.ensureDirectoryExists();
+    } else {
+      // In read-only mode, verify the database file exists
+      if (!existsSync(this.dbPath)) {
+        throw new Error(`Database file not found: ${this.dbPath}`);
+      }
+    }
 
     // Initialize database
     this.db = new Database(this.dbPath, {
@@ -100,6 +107,11 @@ export class SQLiteManager {
    * Public method called when embedding provider dimensions are known
    */
   createVecTablesWithDimensions(dimensions: number): void {
+    // SECURITY: Validate dimensions to prevent SQL injection
+    if (!Number.isInteger(dimensions) || dimensions <= 0 || dimensions > 10000) {
+      throw new Error(`Invalid dimensions: must be a positive integer <= 10000, got ${typeof dimensions === 'number' ? dimensions : 'non-number'}`);
+    }
+
     try {
       // Check if tables already exist with correct dimensions
       // If they exist with different dimensions, we need to drop and recreate
@@ -116,6 +128,7 @@ export class SQLiteManager {
       }
 
       // Create message embeddings virtual table
+      // dimensions is validated above to be a safe integer
       this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS vec_message_embeddings
         USING vec0(
@@ -447,6 +460,9 @@ export class SQLiteManager {
    * Vacuum the database to reclaim space
    */
   vacuum(): void {
+    if (this.isReadOnly) {
+      throw new Error("Cannot vacuum database in read-only mode");
+    }
     this.db.exec("VACUUM");
   }
 
@@ -454,6 +470,9 @@ export class SQLiteManager {
    * Analyze the database for query optimization
    */
   analyze(): void {
+    if (this.isReadOnly) {
+      throw new Error("Cannot analyze database in read-only mode");
+    }
     this.db.exec("ANALYZE");
   }
 
@@ -461,6 +480,9 @@ export class SQLiteManager {
    * Checkpoint the WAL file
    */
   checkpoint(): void {
+    if (this.isReadOnly) {
+      throw new Error("Cannot checkpoint database in read-only mode");
+    }
     this.db.pragma("wal_checkpoint(TRUNCATE)");
   }
 

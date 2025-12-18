@@ -307,7 +307,7 @@ export class SemanticSearch {
         params.push(filter.date_range[0], filter.date_range[1]);
       }
 
-      if (filter.message_type) {
+      if (filter.message_type && filter.message_type.length > 0) {
         sql += ` AND m.message_type IN (${filter.message_type.map(() => "?").join(",")})`;
         params.push(...filter.message_type);
       }
@@ -501,6 +501,12 @@ export class SemanticSearch {
    * Cosine similarity helper
    */
   private cosineSimilarity(a: Float32Array, b: Float32Array): number {
+    // Guard against mismatched dimensions
+    if (a.length !== b.length) {
+      console.warn(`Cosine similarity: dimension mismatch (${a.length} vs ${b.length})`);
+      return 0;
+    }
+
     let dotProduct = 0;
     let normA = 0;
     let normB = 0;
@@ -511,6 +517,11 @@ export class SemanticSearch {
       normB += b[i] * b[i];
     }
 
+    // Guard against division by zero (zero vectors)
+    if (normA === 0 || normB === 0) {
+      return 0;
+    }
+
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
@@ -518,11 +529,19 @@ export class SemanticSearch {
    * Buffer to Float32Array helper
    */
   private bufferToFloat32Array(buffer: Buffer): Float32Array {
-    return new Float32Array(
-      buffer.buffer,
-      buffer.byteOffset,
-      buffer.byteLength / 4
-    );
+    // Validate byte alignment (must be divisible by 4 for Float32)
+    if (buffer.byteLength % 4 !== 0) {
+      console.warn(`Invalid embedding buffer size: ${buffer.byteLength} bytes (not divisible by 4)`);
+      return new Float32Array(0);
+    }
+
+    // Copy to ensure proper alignment (Node Buffers may not be aligned)
+    const aligned = new Float32Array(buffer.byteLength / 4);
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    for (let i = 0; i < aligned.length; i++) {
+      aligned[i] = view.getFloat32(i * 4, true); // little-endian
+    }
+    return aligned;
   }
 
   /**

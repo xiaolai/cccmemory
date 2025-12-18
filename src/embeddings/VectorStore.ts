@@ -150,11 +150,21 @@ export class VectorStore {
   ): Promise<void> {
     const embedId = `msg_${messageId}`;
 
+    // ALWAYS store content in BLOB table for JOINs and fallback
+    // This ensures search can always retrieve content regardless of vec mode
+    this.storeInBlobTable(messageId, content, embedding);
+
     if (this.hasVecExtension) {
       // Ensure vec tables exist with correct dimensions
-      this.ensureVecTables(embedding.length);
+      try {
+        this.ensureVecTables(embedding.length);
+      } catch (error) {
+        console.warn("Failed to ensure vec tables:", (error as Error).message);
+        // Content already stored in BLOB table, so we can continue
+        return;
+      }
 
-      // Use sqlite-vec virtual table
+      // Also store in sqlite-vec virtual table for fast similarity search
       try {
         // Try to delete existing entry first (handles dimension mismatches)
         try {
@@ -175,14 +185,10 @@ export class VectorStore {
         // Only log non-UNIQUE-constraint errors
         const errorMessage = (error as Error).message;
         if (!errorMessage.includes("UNIQUE constraint")) {
-          console.error("Error storing vector embedding:", error);
+          console.warn("Vec embedding storage failed, using BLOB only:", errorMessage);
         }
-        // Fallback to BLOB
-        this.storeInBlobTable(messageId, content, embedding);
+        // Content already stored in BLOB table, so search will still work
       }
-    } else {
-      // Use BLOB storage
-      this.storeInBlobTable(messageId, content, embedding);
     }
   }
 
@@ -322,7 +328,7 @@ export class VectorStore {
    */
   private cosineSimilarity(a: Float32Array, b: Float32Array): number {
     if (a.length !== b.length) {
-      throw new Error("Vectors must have same length");
+      throw new Error(`Vectors must have same length: got ${a.length} and ${b.length}`);
     }
 
     let dotProduct = 0;
@@ -333,6 +339,11 @@ export class VectorStore {
       dotProduct += a[i] * b[i];
       normA += a[i] * a[i];
       normB += b[i] * b[i];
+    }
+
+    // Guard against division by zero (zero vectors)
+    if (normA === 0 || normB === 0) {
+      return 0;
     }
 
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
@@ -349,11 +360,19 @@ export class VectorStore {
    * Convert Buffer to Float32Array for retrieval
    */
   private bufferToFloat32Array(buffer: Buffer): Float32Array {
-    return new Float32Array(
-      buffer.buffer,
-      buffer.byteOffset,
-      buffer.byteLength / 4
-    );
+    // Validate byte alignment (must be divisible by 4 for Float32)
+    if (buffer.byteLength % 4 !== 0) {
+      console.warn(`Invalid embedding buffer size: ${buffer.byteLength} bytes (not divisible by 4)`);
+      return new Float32Array(0);
+    }
+
+    // Copy to ensure proper alignment (Node Buffers may not be aligned)
+    const aligned = new Float32Array(buffer.byteLength / 4);
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    for (let i = 0; i < aligned.length; i++) {
+      aligned[i] = view.getFloat32(i * 4, true); // little-endian
+    }
+    return aligned;
   }
 
   /**
@@ -376,6 +395,11 @@ export class VectorStore {
     if (this.hasVecExtension) {
       try {
         this.db.exec("DELETE FROM vec_message_embeddings");
+      } catch (_e) {
+        // Vector table might not exist
+      }
+      try {
+        this.db.exec("DELETE FROM vec_decision_embeddings");
       } catch (_e) {
         // Vector table might not exist
       }
