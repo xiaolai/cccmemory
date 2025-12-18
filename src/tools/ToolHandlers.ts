@@ -124,16 +124,120 @@ export class ToolHandlers {
     const excludeMcpConversations = typedArgs.exclude_mcp_conversations ?? 'self-only';
     const excludeMcpServers = typedArgs.exclude_mcp_servers;
 
-    const indexResult = await this.memory.indexConversations({
-      projectPath,
-      sessionId,
-      includeThinking,
-      enableGitIntegration: enableGit,
-      excludeMcpConversations,
-      excludeMcpServers,
-    });
+    // Check if we need to use a project-specific database
+    // This is needed when indexing a different project than where the MCP server is running
+    const currentDbPath = this.db.getDbPath();
+    const targetProjectFolderName = pathToProjectFolderName(projectPath);
+    const isCurrentProject = currentDbPath.includes(targetProjectFolderName);
 
-    const stats = this.memory.getStats();
+    let indexResult;
+    let stats;
+
+    if (!isCurrentProject) {
+      // Create a project-specific database for the target project
+      const { SQLiteManager } = await import("../storage/SQLiteManager.js");
+      const { ConversationStorage } = await import("../storage/ConversationStorage.js");
+      const { ConversationParser } = await import("../parsers/ConversationParser.js");
+      const { DecisionExtractor } = await import("../parsers/DecisionExtractor.js");
+      const { MistakeExtractor } = await import("../parsers/MistakeExtractor.js");
+      const { SemanticSearch } = await import("../search/SemanticSearch.js");
+      const { homedir } = await import("os");
+
+      // Create dedicated database in the target project's .claude folder
+      const projectDbPath = join(
+        homedir(),
+        ".claude",
+        "projects",
+        targetProjectFolderName,
+        ".claude-conversations-memory.db"
+      );
+
+      console.log(`\n📂 Using project-specific database for: ${projectPath}`);
+      console.log(`   Database path: ${projectDbPath}`);
+
+      const projectDb = new SQLiteManager({ dbPath: projectDbPath });
+
+      try {
+        const projectStorage = new ConversationStorage(projectDb);
+
+        // Parse conversations from the target project
+        const parser = new ConversationParser();
+        let parseResult = parser.parseProject(projectPath, sessionId);
+
+        // Filter MCP conversations if requested
+        if (excludeMcpConversations || excludeMcpServers) {
+          parseResult = this.filterMcpConversationsHelper(parseResult, {
+            excludeMcpConversations,
+            excludeMcpServers,
+          });
+        }
+
+        // Store basic entities
+        await projectStorage.storeConversations(parseResult.conversations);
+        await projectStorage.storeMessages(parseResult.messages);
+        await projectStorage.storeToolUses(parseResult.tool_uses);
+        await projectStorage.storeToolResults(parseResult.tool_results);
+        await projectStorage.storeFileEdits(parseResult.file_edits);
+
+        if (includeThinking !== false) {
+          await projectStorage.storeThinkingBlocks(parseResult.thinking_blocks);
+        }
+
+        // Extract and store decisions
+        const decisionExtractor = new DecisionExtractor();
+        const decisions = decisionExtractor.extractDecisions(
+          parseResult.messages,
+          parseResult.thinking_blocks
+        );
+        await projectStorage.storeDecisions(decisions);
+
+        // Extract and store mistakes
+        const mistakeExtractor = new MistakeExtractor();
+        const mistakes = mistakeExtractor.extractMistakes(
+          parseResult.messages,
+          parseResult.tool_results
+        );
+        await projectStorage.storeMistakes(mistakes);
+
+        // Generate embeddings for semantic search
+        let embeddingError: string | undefined;
+        try {
+          const semanticSearch = new SemanticSearch(projectDb);
+          await semanticSearch.indexMessages(parseResult.messages);
+          await semanticSearch.indexDecisions(decisions);
+          console.log(`✓ Generated embeddings for project: ${projectPath}`);
+        } catch (embedError) {
+          embeddingError = (embedError as Error).message;
+          console.warn(`⚠️ Embedding generation failed:`, embeddingError);
+          console.warn("   FTS fallback will be used for search");
+        }
+
+        // Get stats
+        stats = projectStorage.getStats();
+
+        indexResult = {
+          embeddings_generated: !embeddingError,
+          embedding_error: embeddingError,
+          indexed_folders: parseResult.indexed_folders,
+          database_path: projectDbPath,
+        };
+      } finally {
+        // Close the project database
+        projectDb.close();
+      }
+    } else {
+      // Use the existing memory instance for the current project
+      indexResult = await this.memory.indexConversations({
+        projectPath,
+        sessionId,
+        includeThinking,
+        enableGitIntegration: enableGit,
+        excludeMcpConversations,
+        excludeMcpServers,
+      });
+
+      stats = this.memory.getStats();
+    }
 
     const sessionInfo = sessionId ? ` (session: ${sessionId})` : ' (all sessions)';
     let message = `Indexed ${stats.conversations.count} conversation(s) with ${stats.messages.count} messages${sessionInfo}`;
@@ -165,6 +269,88 @@ export class ToolHandlers {
       embeddings_generated: indexResult.embeddings_generated,
       embedding_error: indexResult.embedding_error,
       message,
+    };
+  }
+
+  /**
+   * Helper method to filter MCP conversations from parse results.
+   * Extracted to be usable in both the main indexConversations and project-specific indexing.
+   */
+  private filterMcpConversationsHelper<T extends {
+    conversations: unknown[];
+    messages: Array<{ id: string }>;
+    tool_uses: Array<{ id: string; tool_name: string; message_id: string }>;
+    tool_results: Array<{ tool_use_id: string; message_id: string }>;
+    file_edits: Array<{ message_id: string }>;
+    thinking_blocks: Array<{ message_id: string }>;
+    indexed_folders?: string[];
+  }>(
+    result: T,
+    options: { excludeMcpConversations?: boolean | 'self-only' | 'all-mcp'; excludeMcpServers?: string[] }
+  ): T {
+    // Determine which MCP servers to exclude
+    const serversToExclude = new Set<string>();
+
+    if (options.excludeMcpServers && options.excludeMcpServers.length > 0) {
+      options.excludeMcpServers.forEach(s => serversToExclude.add(s));
+    } else if (options.excludeMcpConversations === 'self-only') {
+      serversToExclude.add('conversation-memory');
+    } else if (options.excludeMcpConversations === 'all-mcp' || options.excludeMcpConversations === true) {
+      for (const toolUse of result.tool_uses) {
+        if (toolUse.tool_name.startsWith('mcp__')) {
+          const parts = toolUse.tool_name.split('__');
+          if (parts.length >= 2) {
+            serversToExclude.add(parts[1]);
+          }
+        }
+      }
+    }
+
+    if (serversToExclude.size === 0) {
+      return result;
+    }
+
+    // Build set of excluded tool_use IDs
+    const excludedToolUseIds = new Set<string>();
+    for (const toolUse of result.tool_uses) {
+      if (toolUse.tool_name.startsWith('mcp__')) {
+        const parts = toolUse.tool_name.split('__');
+        if (parts.length >= 2 && serversToExclude.has(parts[1])) {
+          excludedToolUseIds.add(toolUse.id);
+        }
+      }
+    }
+
+    // Build set of excluded message IDs
+    const excludedMessageIds = new Set<string>();
+    for (const toolUse of result.tool_uses) {
+      if (excludedToolUseIds.has(toolUse.id)) {
+        excludedMessageIds.add(toolUse.message_id);
+      }
+    }
+    for (const toolResult of result.tool_results) {
+      if (excludedToolUseIds.has(toolResult.tool_use_id)) {
+        excludedMessageIds.add(toolResult.message_id);
+      }
+    }
+
+    if (excludedMessageIds.size > 0) {
+      console.log(`\n⚠️ Excluding ${excludedMessageIds.size} message(s) containing MCP tool calls from: ${Array.from(serversToExclude).join(', ')}`);
+    }
+
+    const remainingMessageIds = new Set(
+      result.messages
+        .filter(m => !excludedMessageIds.has(m.id))
+        .map(m => m.id)
+    );
+
+    return {
+      ...result,
+      messages: result.messages.filter(m => !excludedMessageIds.has(m.id)),
+      tool_uses: result.tool_uses.filter(t => !excludedToolUseIds.has(t.id)),
+      tool_results: result.tool_results.filter(tr => !excludedToolUseIds.has(tr.tool_use_id)),
+      file_edits: result.file_edits.filter(fe => remainingMessageIds.has(fe.message_id)),
+      thinking_blocks: result.thinking_blocks.filter(tb => remainingMessageIds.has(tb.message_id)),
     };
   }
 
