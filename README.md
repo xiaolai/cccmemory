@@ -1,6 +1,6 @@
 # Claude Conversation Memory MCP
 
-An MCP server that gives Claude Code and Codex long-term memory by indexing conversation history with semantic search, decision tracking, and cross-project search.
+An MCP server that gives Claude long-term memory by indexing conversation history with semantic search, decision tracking, and cross-project search.
 
 ## Features
 
@@ -10,6 +10,7 @@ An MCP server that gives Claude Code and Codex long-term memory by indexing conv
 - **Git integration** - Link conversations to commits
 - **Cross-project search** - Search across all your projects globally
 - **Project migration** - Keep history when renaming/moving projects
+- **Semantic search** - Uses Transformers.js embeddings (bundled, works offline)
 
 ## Installation
 
@@ -17,35 +18,48 @@ An MCP server that gives Claude Code and Codex long-term memory by indexing conv
 npm install -g claude-conversation-memory-mcp
 ```
 
-The installer automatically configures Claude Code. To verify:
+Verify installation:
 
 ```bash
 claude-conversation-memory-mcp --version
 ```
 
-### Embedding Providers (Optional)
-
-For semantic search, install one of:
-
-**Ollama** (recommended - fast, local):
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull mxbai-embed-large
-ollama serve
-```
-
-**Transformers.js** (no setup, slower):
-```bash
-npm install @xenova/transformers
-```
-
-Without either, the MCP falls back to full-text search.
-
 ## Configuration
 
-The MCP auto-configures on install. Manual setup if needed:
+### For Claude Desktop
 
-**~/.claude/config.json** (Claude Code):
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "conversation-memory": {
+      "command": "npx",
+      "args": ["-y", "claude-conversation-memory-mcp"]
+    }
+  }
+}
+```
+
+Then restart Claude Desktop.
+
+### For Claude Code
+
+Edit `~/.claude.json` (note: this file is in your home directory, not inside `~/.claude/`):
+
+```json
+{
+  "mcpServers": {
+    "conversation-memory": {
+      "command": "npx",
+      "args": ["-y", "claude-conversation-memory-mcp"]
+    }
+  }
+}
+```
+
+Or if installed globally:
+
 ```json
 {
   "mcpServers": {
@@ -56,7 +70,35 @@ The MCP auto-configures on install. Manual setup if needed:
 }
 ```
 
-**Embedding config** (optional) - create `.claude-memory-config.json`:
+### Embedding Configuration (Optional)
+
+The MCP uses **Transformers.js** by default for semantic search (bundled, works offline, no setup required).
+
+To customize, create `~/.claude-memory-config.json`:
+
+```json
+{
+  "embedding": {
+    "provider": "transformers",
+    "model": "Xenova/all-MiniLM-L6-v2",
+    "dimensions": 384
+  }
+}
+```
+
+**Alternative providers:**
+
+<details>
+<summary>Ollama (faster, requires Ollama running)</summary>
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull mxbai-embed-large
+ollama serve
+```
+
+Config:
 ```json
 {
   "embedding": {
@@ -66,6 +108,23 @@ The MCP auto-configures on install. Manual setup if needed:
   }
 }
 ```
+</details>
+
+<details>
+<summary>OpenAI (requires API key)</summary>
+
+```json
+{
+  "embedding": {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "dimensions": 1536
+  }
+}
+```
+
+Set `OPENAI_API_KEY` environment variable.
+</details>
 
 ## MCP Tools
 
@@ -121,11 +180,11 @@ claude-conversation-memory-mcp help
 
 ## Supported Platforms
 
-| Platform | Status | Location |
-|----------|--------|----------|
-| Claude Code | Supported | `~/.claude/projects/` |
-| Codex | Supported | `~/.codex/sessions/` |
-| Claude Desktop | Not supported | Different format |
+| Platform | Status | Conversation Location |
+|----------|--------|----------------------|
+| Claude Code | ✅ Supported | `~/.claude/projects/` |
+| Claude Desktop | ✅ Supported | (indexes Claude Code history) |
+| Codex | ✅ Supported | `~/.codex/sessions/` |
 
 ## Architecture
 
@@ -137,6 +196,30 @@ Per-Project Databases (isolation)
 Global Registry (cross-project search)
 └── ~/.claude/.claude-global-index.db
 ```
+
+## Troubleshooting
+
+### Claude Desktop shows JSON parse errors
+
+Upgrade to v1.7.3+:
+```bash
+npm update -g claude-conversation-memory-mcp
+```
+
+### MCP not loading in Claude Code
+
+1. Check config location is `~/.claude.json` (not `~/.claude/config.json`)
+2. Verify JSON syntax is valid
+3. Restart Claude Code
+
+### Embeddings not working
+
+Check provider status:
+```bash
+claude-conversation-memory-mcp status
+```
+
+Default Transformers.js should work out of the box. If using Ollama, ensure it's running (`ollama serve`).
 
 ## License
 
