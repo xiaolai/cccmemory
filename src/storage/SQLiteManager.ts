@@ -16,8 +16,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Performance constants (from code-graph-rag-mcp)
-const CACHE_SIZE_KB = 64000; // 64MB cache
-const MMAP_SIZE = 30000000000; // 30GB memory-mapped I/O
+const DEFAULT_CACHE_SIZE_KB = 64000; // 64MB cache
+const DEFAULT_MMAP_SIZE = 1000000000; // 1GB memory-mapped I/O (safe default)
 const PAGE_SIZE = 4096; // 4KB page size
 const WAL_AUTOCHECKPOINT = 1000; // Checkpoint WAL after 1000 pages
 
@@ -26,14 +26,22 @@ export interface SQLiteConfig {
   projectPath?: string;
   readOnly?: boolean;
   verbose?: boolean;
+  /** Memory-mapped I/O size in bytes (default: 1GB). Set to 0 to disable. */
+  mmapSize?: number;
+  /** Cache size in KB (default: 64MB) */
+  cacheSizeKb?: number;
 }
 
 export class SQLiteManager {
   private db: Database.Database;
   private dbPath: string;
   private isReadOnly: boolean;
+  private mmapSize: number;
+  private cacheSizeKb: number;
 
   constructor(config: SQLiteConfig = {}) {
+    this.mmapSize = config.mmapSize ?? DEFAULT_MMAP_SIZE;
+    this.cacheSizeKb = config.cacheSizeKb ?? DEFAULT_CACHE_SIZE_KB;
     // Determine database location
     if (config.dbPath) {
       // Explicit path provided
@@ -177,14 +185,16 @@ export class SQLiteManager {
     }
 
     // These PRAGMAs are safe in read-only mode
-    // 64MB cache for better performance
-    this.db.pragma(`cache_size = -${CACHE_SIZE_KB}`);
+    // Configurable cache for better performance (default 64MB)
+    this.db.pragma(`cache_size = -${this.cacheSizeKb}`);
 
     // Store temp tables in memory
     this.db.pragma("temp_store = MEMORY");
 
-    // Memory-mapped I/O for faster access
-    this.db.pragma(`mmap_size = ${MMAP_SIZE}`);
+    // Configurable memory-mapped I/O (default 1GB, safe for most systems)
+    if (this.mmapSize > 0) {
+      this.db.pragma(`mmap_size = ${this.mmapSize}`);
+    }
 
     // Enable foreign key constraints
     this.db.pragma("foreign_keys = ON");
@@ -501,19 +511,57 @@ export class SQLiteManager {
   }
 }
 
-// Singleton instance
-let instance: SQLiteManager | null = null;
+// Instance cache keyed by dbPath to support multiple databases
+const instances = new Map<string, SQLiteManager>();
 
+/**
+ * Get a SQLiteManager instance for the given config.
+ * Instances are cached by dbPath to avoid re-opening the same database.
+ */
 export function getSQLiteManager(config?: SQLiteConfig): SQLiteManager {
-  if (!instance) {
-    instance = new SQLiteManager(config);
+  // Create a temporary instance to resolve the dbPath from config
+  const resolvedPath = config?.dbPath || (() => {
+    const projectPath = config?.projectPath || process.cwd();
+    const projectFolderName = pathToProjectFolderName(projectPath);
+    return join(
+      homedir(),
+      ".claude",
+      "projects",
+      projectFolderName,
+      ".claude-conversations-memory.db"
+    );
+  })();
+
+  // Check if we already have an instance for this path
+  const existing = instances.get(resolvedPath);
+  if (existing) {
+    return existing;
   }
+
+  // Create new instance and cache it
+  const instance = new SQLiteManager(config);
+  instances.set(resolvedPath, instance);
   return instance;
 }
 
+/**
+ * Reset all cached SQLiteManager instances.
+ * Useful for testing or when switching projects.
+ */
 export function resetSQLiteManager(): void {
+  for (const instance of instances.values()) {
+    instance.close();
+  }
+  instances.clear();
+}
+
+/**
+ * Reset a specific SQLiteManager instance by path.
+ */
+export function resetSQLiteManagerByPath(dbPath: string): void {
+  const instance = instances.get(dbPath);
   if (instance) {
     instance.close();
-    instance = null;
+    instances.delete(dbPath);
   }
 }

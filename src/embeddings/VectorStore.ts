@@ -142,17 +142,22 @@ export class VectorStore {
 
   /**
    * Store an embedding for a message
+   * @param messageId - The message ID
+   * @param content - The message content
+   * @param embedding - The embedding vector
+   * @param modelName - The model used to generate the embedding (default: all-MiniLM-L6-v2)
    */
   async storeMessageEmbedding(
     messageId: string,
     content: string,
-    embedding: Float32Array
+    embedding: Float32Array,
+    modelName: string = "all-MiniLM-L6-v2"
   ): Promise<void> {
     const embedId = `msg_${messageId}`;
 
     // ALWAYS store content in BLOB table for JOINs and fallback
     // This ensures search can always retrieve content regardless of vec mode
-    this.storeInBlobTable(messageId, content, embedding);
+    this.storeInBlobTable(messageId, content, embedding, modelName);
 
     if (this.hasVecExtension) {
       // Ensure vec tables exist with correct dimensions
@@ -198,7 +203,8 @@ export class VectorStore {
   private storeInBlobTable(
     messageId: string,
     content: string,
-    embedding: Float32Array
+    embedding: Float32Array,
+    modelName: string
   ): void {
     this.db
       .prepare(
@@ -217,7 +223,7 @@ export class VectorStore {
         messageId,
         content,
         this.float32ArrayToBuffer(embedding),
-        "all-MiniLM-L6-v2",
+        modelName,
         Date.now()
       );
   }

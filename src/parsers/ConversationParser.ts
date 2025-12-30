@@ -162,6 +162,18 @@ export interface ThinkingBlock {
 }
 
 /**
+ * Information about a parsing error
+ */
+export interface ParseError {
+  /** File path where error occurred */
+  file: string;
+  /** Line number (1-based) */
+  line: number;
+  /** Error message */
+  error: string;
+}
+
+/**
  * Result of parsing conversation history.
  *
  * Contains all extracted entities from conversation files.
@@ -181,6 +193,8 @@ export interface ParseResult {
   thinking_blocks: ThinkingBlock[];
   /** Folders that were actually indexed */
   indexed_folders?: string[];
+  /** Parsing errors encountered (bad JSON lines, etc.) */
+  parse_errors?: ParseError[];
 }
 
 /**
@@ -411,12 +425,23 @@ export class ConversationParser {
 
     // Parse messages from this file
     const fileMessages: ConversationMessage[] = [];
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       try {
         const msg = JSON.parse(line);
         fileMessages.push(msg);
       } catch (error) {
-        console.error(`Error parsing line in ${filePath}:`, error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`Error parsing line ${i + 1} in ${filePath}: ${errorMsg}`);
+        // Track the error
+        if (!result.parse_errors) {
+          result.parse_errors = [];
+        }
+        result.parse_errors.push({
+          file: filePath,
+          line: i + 1,
+          error: errorMsg,
+        });
       }
     }
 

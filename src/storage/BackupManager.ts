@@ -3,7 +3,7 @@
  * Exports affected data to JSON for potential restoration
  */
 
-import { writeFileSync, mkdirSync, existsSync } from "fs";
+import { writeFileSync, mkdirSync, existsSync, chmodSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import type Database from "better-sqlite3";
@@ -144,6 +144,14 @@ export class BackupManager {
     };
 
     writeFileSync(backupPath, JSON.stringify(fullBackup, null, 2), "utf-8");
+
+    // Set restrictive permissions (owner read/write only) to protect sensitive data
+    // 0o600 = rw------- (only owner can read/write)
+    try {
+      chmodSync(backupPath, 0o600);
+    } catch (_error) {
+      // chmod may fail on some platforms (e.g., Windows), continue anyway
+    }
 
     console.error(`✓ Backup created: ${backupPath}`);
     console.error(`  ${recordCounts.conversations} conversations`);

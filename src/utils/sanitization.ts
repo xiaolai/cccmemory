@@ -13,6 +13,16 @@ export function sanitizeForLike(input: string): string {
 }
 
 /**
+ * Check if a path contains path traversal attempts
+ * Only rejects actual '..' path segments, not filenames containing '..'
+ */
+function hasPathTraversal(pathStr: string): boolean {
+  // Split on both Unix and Windows separators
+  const segments = pathStr.split(/[\\/]/);
+  return segments.some(segment => segment === '..');
+}
+
+/**
  * Validate and sanitize file path
  * Cross-platform: prevents path traversal attacks and blocks system directories
  */
@@ -20,8 +30,8 @@ export function validateFilePath(filePath: string): string {
   // Remove any null bytes
   const cleaned = filePath.replace(/\0/g, '');
 
-  // Check for path traversal attempts
-  if (cleaned.includes('..')) {
+  // Check for path traversal attempts (only actual '..' segments)
+  if (hasPathTraversal(cleaned)) {
     throw new Error('Path traversal detected: .. is not allowed in file paths');
   }
 
@@ -35,15 +45,29 @@ export function validateFilePath(filePath: string): string {
       /^[A-Z]:\\Program Files/i,
       /^[A-Z]:\\ProgramData/i,
       /^[A-Z]:\\System/i,
+      /^[A-Z]:\\System32/i,
+      /^[A-Z]:\\Boot/i,
     ];
     if (forbidden.some(pattern => pattern.test(cleaned))) {
       throw new Error('Access to system directories is not allowed');
     }
   } else {
-    // Unix system directories
-    if (cleaned.startsWith('/etc') ||
-        cleaned.startsWith('/sys') ||
-        cleaned.startsWith('/proc')) {
+    // Unix system directories - comprehensive list
+    const forbiddenPaths = [
+      '/etc',
+      '/sys',
+      '/proc',
+      '/dev',
+      '/boot',
+      '/sbin',
+      '/bin',
+      '/lib',
+      '/lib64',
+      '/usr/sbin',
+      '/var/run',
+      '/var/lock',
+    ];
+    if (forbiddenPaths.some(dir => cleaned === dir || cleaned.startsWith(dir + '/'))) {
       throw new Error('Access to system directories is not allowed');
     }
   }

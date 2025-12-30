@@ -1,5 +1,5 @@
 /**
- * MCP Tool Handlers - Implementation of all 13 tools for the conversation-memory MCP server.
+ * MCP Tool Handlers - Implementation of all 22 tools for the conversation-memory MCP server.
  *
  * This class provides the implementation for all MCP (Model Context Protocol) tools
  * that allow Claude to interact with conversation history and memory.
@@ -899,7 +899,7 @@ export class ToolHandlers {
 
     if (query) {
       sql += " AND message LIKE ?";
-      params.push(`%${query}%`);
+      params.push(`%${sanitizeForLike(query)}%`);
     }
 
     sql += ` ORDER BY timestamp DESC LIMIT ? OFFSET ?`;

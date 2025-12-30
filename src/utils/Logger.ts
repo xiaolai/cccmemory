@@ -127,12 +127,22 @@ export class Logger {
 }
 
 /**
+ * Parse LOG_LEVEL environment variable (case-insensitive)
+ */
+function parseLogLevel(levelStr: string | undefined): LogLevel {
+  if (!levelStr) {
+    return LogLevel.INFO;
+  }
+  const normalized = levelStr.toUpperCase();
+  const level = LogLevel[normalized as keyof typeof LogLevel];
+  return level !== undefined ? level : LogLevel.INFO;
+}
+
+/**
  * Default logger instance
  */
 export const logger = new Logger({
-  level: process.env.LOG_LEVEL
-    ? (LogLevel[process.env.LOG_LEVEL as keyof typeof LogLevel] ?? LogLevel.INFO)
-    : LogLevel.INFO,
+  level: parseLogLevel(process.env.LOG_LEVEL),
   timestamp: false,
 });
 

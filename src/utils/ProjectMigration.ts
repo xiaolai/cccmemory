@@ -478,9 +478,11 @@ export class ProjectMigration {
       return 100;
     }
 
-    // Split into components
-    const currentParts = currentPath.split("/").filter(p => p.length > 0);
-    const oldParts = oldPath.split("/").filter(p => p.length > 0);
+    // Split into components using platform-aware separator
+    // Handle both Unix (/) and Windows (\) paths
+    const pathSeparatorRegex = /[\\/]/;
+    const currentParts = currentPath.split(pathSeparatorRegex).filter(p => p.length > 0);
+    const oldParts = oldPath.split(pathSeparatorRegex).filter(p => p.length > 0);
 
     // Count matching components
     let matches = 0;

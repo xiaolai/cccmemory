@@ -173,6 +173,63 @@ export class DeletionService {
         )
         .run(...preview.conversationIds);
 
+      // Delete vector embeddings (no CASCADE from sqlite-vec tables)
+      // Get message IDs first
+      const messageIds = this.db
+        .prepare(`SELECT id FROM messages WHERE conversation_id IN (${placeholders})`)
+        .all(...preview.conversationIds) as Array<{ id: string }>;
+
+      if (messageIds.length > 0) {
+        const msgPlaceholders = messageIds.map(() => "?").join(",");
+        const msgEmbedIds = messageIds.map(m => `msg_${m.id}`);
+
+        // Delete from BLOB fallback table
+        try {
+          this.db
+            .prepare(`DELETE FROM message_embeddings WHERE message_id IN (${msgPlaceholders})`)
+            .run(...messageIds.map(m => m.id));
+        } catch (_e) {
+          // Table might not exist
+        }
+
+        // Delete from sqlite-vec virtual table
+        try {
+          this.db
+            .prepare(`DELETE FROM vec_message_embeddings WHERE id IN (${msgPlaceholders})`)
+            .run(...msgEmbedIds);
+        } catch (_e) {
+          // Vec table might not exist
+        }
+      }
+
+      // Delete decision embeddings
+      const decisionIds = this.db
+        .prepare(`SELECT id FROM decisions WHERE conversation_id IN (${placeholders})`)
+        .all(...preview.conversationIds) as Array<{ id: string }>;
+
+      if (decisionIds.length > 0) {
+        const decPlaceholders = decisionIds.map(() => "?").join(",");
+        const decEmbedIds = decisionIds.map(d => `dec_${d.id}`);
+
+        // Delete from BLOB fallback table
+        try {
+          this.db
+            .prepare(`DELETE FROM decision_embeddings WHERE decision_id IN (${decPlaceholders})`)
+            .run(...decisionIds.map(d => d.id));
+        } catch (_e) {
+          // Table might not exist
+        }
+
+        // Delete from sqlite-vec virtual table
+        try {
+          this.db
+            .prepare(`DELETE FROM vec_decision_embeddings WHERE id IN (${decPlaceholders})`)
+            .run(...decEmbedIds);
+        } catch (_e) {
+          // Vec table might not exist
+        }
+      }
+
       // Delete conversations (CASCADE handles the rest)
       this.db
         .prepare(`DELETE FROM conversations WHERE id IN (${placeholders})`)
@@ -224,7 +281,8 @@ export class DeletionService {
 
     // Also try FTS5 search for exact matches
     try {
-      const ftsQuery = keywords.map((k) => `"${k}"`).join(" OR ");
+      // Escape internal double quotes in keywords to prevent FTS syntax errors
+      const ftsQuery = keywords.map((k) => `"${k.replace(/"/g, '""')}"`).join(" OR ");
       const messages = this.db
         .prepare(
           `SELECT DISTINCT m.conversation_id

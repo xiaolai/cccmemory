@@ -5,7 +5,7 @@
 
 import type { SQLiteManager } from "../storage/SQLiteManager.js";
 import { VectorStore } from "../embeddings/VectorStore.js";
-import { getEmbeddingGenerator } from "../embeddings/EmbeddingGenerator.js";
+import { getEmbeddingGenerator, EmbeddingGenerator } from "../embeddings/EmbeddingGenerator.js";
 import type { Message, Conversation } from "../parsers/ConversationParser.js";
 import type { Decision } from "../parsers/DecisionExtractor.js";
 import type { MessageRow, DecisionRow, ConversationRow } from "../types/ToolTypes.js";
@@ -81,12 +81,17 @@ export class SemanticSearch {
     const texts = messagesToIndex.map((m) => m.content);
     const embeddings = await embedder.embedBatch(texts, 32);
 
+    // Get model name from embedder info
+    const embedderInfo = EmbeddingGenerator.getInfo();
+    const modelName = embedderInfo?.model || "all-MiniLM-L6-v2";
+
     // Store embeddings
     for (let i = 0; i < messagesToIndex.length; i++) {
       await this.vectorStore.storeMessageEmbedding(
         messagesToIndex[i].id,
         messagesToIndex[i].content,
-        embeddings[i]
+        embeddings[i],
+        modelName
       );
     }
 
