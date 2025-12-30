@@ -286,12 +286,24 @@ export class ConversationStorage {
         metadata = excluded.metadata
     `);
 
+    // Build a set of message IDs for FK validation
+    const messageIds = new Set(messages.map(m => m.id));
+
+    // Also check existing messages in DB to allow parent references to pre-existing messages
+    const existingIds = this.db.prepare("SELECT id FROM messages").all() as { id: string }[];
+    for (const row of existingIds) {
+      messageIds.add(row.id);
+    }
+
     this.db.transaction(() => {
       for (const msg of messages) {
+        // Nullify parent_id if it references a non-existent message to avoid FK violation
+        const safeParentId = msg.parent_id && messageIds.has(msg.parent_id) ? msg.parent_id : null;
+
         stmt.run(
           msg.id,
           msg.conversation_id,
-          msg.parent_id || null,
+          safeParentId,
           msg.message_type,
           msg.role || null,
           msg.content || null,
