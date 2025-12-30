@@ -25,7 +25,8 @@
  * ```
  */
 
-import { readFileSync, readdirSync, existsSync, statSync } from "fs";
+import { readFileSync, readdirSync, existsSync, statSync, createReadStream } from "fs";
+import { createInterface } from "readline";
 import { join } from "path";
 import { nanoid } from "nanoid";
 import { pathToProjectFolderName } from "../utils/sanitization.js";
@@ -413,6 +414,140 @@ export class ConversationParser {
     );
 
     return result;
+  }
+
+  /**
+   * Parse conversations from a Claude projects folder using streaming.
+   *
+   * This async method uses line-by-line streaming to efficiently handle
+   * large JSONL files without loading the entire file into memory.
+   * Use this method for large conversation histories.
+   *
+   * @param folderPath - Absolute path to the Claude projects folder
+   * @param projectIdentifier - Optional identifier to use as project_path in records
+   * @param lastIndexedMs - Optional timestamp for incremental indexing (skip unchanged files)
+   * @returns Promise<ParseResult> containing all extracted entities
+   *
+   * @example
+   * ```typescript
+   * const parser = new ConversationParser();
+   * const result = await parser.parseFromFolderAsync('~/.claude/projects/-Users-me-my-project');
+   * ```
+   */
+  async parseFromFolderAsync(
+    folderPath: string,
+    projectIdentifier?: string,
+    lastIndexedMs?: number
+  ): Promise<ParseResult> {
+    const result: ParseResult = {
+      conversations: [],
+      messages: [],
+      tool_uses: [],
+      tool_results: [],
+      file_edits: [],
+      thinking_blocks: [],
+      indexed_folders: [folderPath],
+    };
+
+    // Use folder path as project identifier if not provided
+    const projectPath = projectIdentifier || folderPath;
+
+    if (!existsSync(folderPath)) {
+      console.error(`⚠️ Folder does not exist: ${folderPath}`);
+      return result;
+    }
+
+    // Get all .jsonl files in the folder
+    const files = readdirSync(folderPath).filter((f) => f.endsWith(".jsonl"));
+    console.error(`Found ${files.length} conversation file(s) in ${folderPath}`);
+
+    // Parse each file, optionally skipping unchanged files in incremental mode
+    let skippedCount = 0;
+    for (const file of files) {
+      const filePath = join(folderPath, file);
+
+      // Skip unchanged files in incremental mode
+      if (lastIndexedMs) {
+        try {
+          const stats = statSync(filePath);
+          if (stats.mtimeMs < lastIndexedMs) {
+            skippedCount++;
+            continue;
+          }
+        } catch (_e) {
+          // If we can't stat the file, try to parse it anyway
+        }
+      }
+
+      await this.parseFileAsync(filePath, result, projectPath);
+    }
+
+    if (skippedCount > 0) {
+      console.error(`⏭ Skipped ${skippedCount} unchanged file(s)`);
+    }
+    console.error(
+      `Parsed ${result.conversations.length} conversations, ${result.messages.length} messages`
+    );
+
+    return result;
+  }
+
+  /**
+   * Parse a single .jsonl file using streaming (async).
+   *
+   * Uses readline interface with createReadStream to read the file
+   * line by line, avoiding loading the entire file into memory.
+   */
+  private async parseFileAsync(
+    filePath: string,
+    result: ParseResult,
+    projectPath: string
+  ): Promise<void> {
+    const fileMessages: ConversationMessage[] = [];
+
+    // Create readline interface for streaming
+    const fileStream = createReadStream(filePath, { encoding: "utf-8" });
+    const rl = createInterface({
+      input: fileStream,
+      crlfDelay: Infinity, // Handle both \n and \r\n
+    });
+
+    let lineNumber = 0;
+    for await (const line of rl) {
+      lineNumber++;
+      const trimmedLine = line.trim();
+      if (!trimmedLine) {
+        continue;
+      }
+
+      try {
+        const msg = JSON.parse(trimmedLine);
+        fileMessages.push(msg);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`Error parsing line ${lineNumber} in ${filePath}: ${errorMsg}`);
+        // Track the error
+        if (!result.parse_errors) {
+          result.parse_errors = [];
+        }
+        result.parse_errors.push({
+          file: filePath,
+          line: lineNumber,
+          error: errorMsg,
+        });
+      }
+    }
+
+    if (fileMessages.length === 0) {
+      return;
+    }
+
+    // Run multi-pass extraction (same as sync version)
+    this.extractConversation(fileMessages, result, projectPath);
+    this.extractMessages(fileMessages, result);
+    this.extractToolCalls(fileMessages, result);
+    this.extractFileEdits(fileMessages, result);
+    this.extractThinkingBlocks(fileMessages, result);
   }
 
   /**
