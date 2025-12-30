@@ -33,6 +33,7 @@ import type { Requirement, Validation } from "../parsers/RequirementsExtractor.j
 import { sanitizeForLike } from "../utils/sanitization.js";
 import type { DecisionRow, GitCommitRow, ConversationRow } from "../types/ToolTypes.js";
 import { QueryCache, type QueryCacheConfig, type CacheStats } from "../cache/QueryCache.js";
+import { safeJsonParse } from "../utils/safeJson.js";
 
 /**
  * Data access layer for conversation memory storage.
@@ -123,7 +124,7 @@ export class ConversationStorage {
   /**
    * Store conversations in the database.
    *
-   * Uses INSERT OR REPLACE to handle both new and updated conversations.
+   * Uses UPSERT (INSERT ON CONFLICT UPDATE) to handle both new and updated conversations.
    * All operations are performed in a single transaction for atomicity.
    *
    * @param conversations - Array of conversation objects to store
@@ -149,10 +150,20 @@ export class ConversationStorage {
    */
   async storeConversations(conversations: Conversation[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO conversations
+      INSERT INTO conversations
       (id, project_path, source_type, first_message_at, last_message_at, message_count,
        git_branch, claude_version, metadata, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        project_path = excluded.project_path,
+        source_type = excluded.source_type,
+        first_message_at = excluded.first_message_at,
+        last_message_at = excluded.last_message_at,
+        message_count = excluded.message_count,
+        git_branch = excluded.git_branch,
+        claude_version = excluded.claude_version,
+        metadata = excluded.metadata,
+        updated_at = excluded.updated_at
     `);
 
     this.db.transaction(() => {
@@ -170,14 +181,13 @@ export class ConversationStorage {
           conv.created_at,
           conv.updated_at
         );
-        // Invalidate cache for this conversation and related caches
-        if (this.cache) {
-          this.cache.delete(`conversation:${conv.id}`);
-          // Also clear timeline caches since conversations affect them
-          this.cache.clear(); // Full clear is safest for conversation updates
-        }
       }
     });
+
+    // Invalidate cache once after batch (not per-item)
+    if (this.cache) {
+      this.cache.clear();
+    }
 
     console.error(`✓ Stored ${conversations.length} conversations`);
   }
@@ -217,16 +227,9 @@ export class ConversationStorage {
       return null;
     }
 
-    let metadata: Record<string, unknown> = {};
-    try {
-      metadata = JSON.parse(row.metadata || "{}");
-    } catch (_e) {
-      console.error(`Invalid JSON in conversation ${id} metadata`);
-    }
-
     const result = {
       ...row,
-      metadata,
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
     };
 
     // Cache the result
@@ -240,9 +243,10 @@ export class ConversationStorage {
    * Store messages in the database.
    *
    * Stores all messages from conversations including content, metadata, and relationships.
-   * Uses INSERT OR REPLACE for idempotent storage.
+   * Uses UPSERT (INSERT ON CONFLICT UPDATE) for idempotent storage.
    *
    * @param messages - Array of message objects to store
+   * @param skipFtsRebuild - Skip FTS rebuild (for batch operations, call rebuildAllFts() at end)
    * @returns Promise that resolves when all messages are stored
    *
    * @example
@@ -261,12 +265,25 @@ export class ConversationStorage {
    * ]);
    * ```
    */
-  async storeMessages(messages: Message[]): Promise<void> {
+  async storeMessages(messages: Message[], skipFtsRebuild = false): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO messages
+      INSERT INTO messages
       (id, conversation_id, parent_id, message_type, role, content,
        timestamp, is_sidechain, agent_id, request_id, git_branch, cwd, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        conversation_id = excluded.conversation_id,
+        parent_id = excluded.parent_id,
+        message_type = excluded.message_type,
+        role = excluded.role,
+        content = excluded.content,
+        timestamp = excluded.timestamp,
+        is_sidechain = excluded.is_sidechain,
+        agent_id = excluded.agent_id,
+        request_id = excluded.request_id,
+        git_branch = excluded.git_branch,
+        cwd = excluded.cwd,
+        metadata = excluded.metadata
     `);
 
     this.db.transaction(() => {
@@ -291,7 +308,10 @@ export class ConversationStorage {
 
     // Rebuild FTS index for full-text search
     // FTS5 with external content requires explicit rebuild after inserts
-    this.rebuildMessagesFts();
+    // Skip during batch operations for performance (call rebuildAllFts() at end)
+    if (!skipFtsRebuild) {
+      this.rebuildMessagesFts();
+    }
 
     console.error(`✓ Stored ${messages.length} messages`);
   }
@@ -299,8 +319,9 @@ export class ConversationStorage {
   /**
    * Rebuild the messages FTS index.
    * Required for FTS5 external content tables after inserting data.
+   * Call this after batch operations that used skipFtsRebuild=true.
    */
-  private rebuildMessagesFts(): void {
+  rebuildMessagesFts(): void {
     try {
       this.db.getDatabase().exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
     } catch (error) {
@@ -322,9 +343,14 @@ export class ConversationStorage {
    */
   async storeToolUses(toolUses: ToolUse[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO tool_uses
+      INSERT INTO tool_uses
       (id, message_id, tool_name, tool_input, timestamp)
       VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        message_id = excluded.message_id,
+        tool_name = excluded.tool_name,
+        tool_input = excluded.tool_input,
+        timestamp = excluded.timestamp
     `);
 
     this.db.transaction(() => {
@@ -354,9 +380,18 @@ export class ConversationStorage {
    */
   async storeToolResults(toolResults: ToolResult[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO tool_results
+      INSERT INTO tool_results
       (id, tool_use_id, message_id, content, is_error, stdout, stderr, is_image, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        tool_use_id = excluded.tool_use_id,
+        message_id = excluded.message_id,
+        content = excluded.content,
+        is_error = excluded.is_error,
+        stdout = excluded.stdout,
+        stderr = excluded.stderr,
+        is_image = excluded.is_image,
+        timestamp = excluded.timestamp
     `);
 
     this.db.transaction(() => {
@@ -390,10 +425,18 @@ export class ConversationStorage {
    */
   async storeFileEdits(fileEdits: FileEdit[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO file_edits
+      INSERT INTO file_edits
       (id, conversation_id, file_path, message_id, backup_version,
        backup_time, snapshot_timestamp, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        conversation_id = excluded.conversation_id,
+        file_path = excluded.file_path,
+        message_id = excluded.message_id,
+        backup_version = excluded.backup_version,
+        backup_time = excluded.backup_time,
+        snapshot_timestamp = excluded.snapshot_timestamp,
+        metadata = excluded.metadata
     `);
 
     this.db.transaction(() => {
@@ -460,9 +503,14 @@ export class ConversationStorage {
    */
   async storeThinkingBlocks(blocks: ThinkingBlock[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO thinking_blocks
+      INSERT INTO thinking_blocks
       (id, message_id, thinking_content, signature, timestamp)
       VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        message_id = excluded.message_id,
+        thinking_content = excluded.thinking_content,
+        signature = excluded.signature,
+        timestamp = excluded.timestamp
     `);
 
     this.db.transaction(() => {
@@ -488,15 +536,27 @@ export class ConversationStorage {
    * Decisions include architectural choices, technical decisions, and their rationale.
    *
    * @param decisions - Array of decision objects
+   * @param skipFtsRebuild - Skip FTS rebuild (for batch operations, call rebuildAllFts() at end)
    * @returns Promise that resolves when stored
    */
-  async storeDecisions(decisions: Decision[]): Promise<void> {
+  async storeDecisions(decisions: Decision[], skipFtsRebuild = false): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO decisions
+      INSERT INTO decisions
       (id, conversation_id, message_id, decision_text, rationale,
        alternatives_considered, rejected_reasons, context, related_files,
        related_commits, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        conversation_id = excluded.conversation_id,
+        message_id = excluded.message_id,
+        decision_text = excluded.decision_text,
+        rationale = excluded.rationale,
+        alternatives_considered = excluded.alternatives_considered,
+        rejected_reasons = excluded.rejected_reasons,
+        context = excluded.context,
+        related_files = excluded.related_files,
+        related_commits = excluded.related_commits,
+        timestamp = excluded.timestamp
     `);
 
     this.db.transaction(() => {
@@ -519,7 +579,10 @@ export class ConversationStorage {
 
     // Rebuild FTS index for full-text search
     // FTS5 with external content requires explicit rebuild after inserts
-    this.rebuildDecisionsFts();
+    // Skip during batch operations for performance (call rebuildAllFts() at end)
+    if (!skipFtsRebuild) {
+      this.rebuildDecisionsFts();
+    }
 
     console.error(`✓ Stored ${decisions.length} decisions`);
   }
@@ -527,8 +590,9 @@ export class ConversationStorage {
   /**
    * Rebuild the decisions FTS index.
    * Required for FTS5 external content tables after inserting data.
+   * Call this after batch operations that used skipFtsRebuild=true.
    */
-  private rebuildDecisionsFts(): void {
+  rebuildDecisionsFts(): void {
     try {
       this.db.getDatabase().exec("INSERT INTO decisions_fts(decisions_fts) VALUES('rebuild')");
     } catch (error) {
@@ -536,6 +600,15 @@ export class ConversationStorage {
       // Log but don't throw - FTS is optional fallback
       console.error("FTS decisions rebuild warning:", (error as Error).message);
     }
+  }
+
+  /**
+   * Rebuild all FTS indexes.
+   * Call this once after batch operations that used skipFtsRebuild=true.
+   */
+  rebuildAllFts(): void {
+    this.rebuildMessagesFts();
+    this.rebuildDecisionsFts();
   }
 
   /**
@@ -563,10 +636,10 @@ export class ConversationStorage {
 
     const result = rows.map((row) => ({
       ...row,
-      alternatives_considered: JSON.parse(row.alternatives_considered || "[]"),
-      rejected_reasons: JSON.parse(row.rejected_reasons || "{}"),
-      related_files: JSON.parse(row.related_files || "[]"),
-      related_commits: JSON.parse(row.related_commits || "[]"),
+      alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+      rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+      related_files: safeJsonParse<string[]>(row.related_files, []),
+      related_commits: safeJsonParse<string[]>(row.related_commits, []),
     }));
 
     // Cache the result
@@ -586,10 +659,19 @@ export class ConversationStorage {
    */
   async storeGitCommits(commits: GitCommit[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO git_commits
+      INSERT INTO git_commits
       (hash, message, author, timestamp, branch, files_changed,
        conversation_id, related_message_id, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(hash) DO UPDATE SET
+        message = excluded.message,
+        author = excluded.author,
+        timestamp = excluded.timestamp,
+        branch = excluded.branch,
+        files_changed = excluded.files_changed,
+        conversation_id = excluded.conversation_id,
+        related_message_id = excluded.related_message_id,
+        metadata = excluded.metadata
     `);
 
     this.db.transaction(() => {
@@ -629,8 +711,8 @@ export class ConversationStorage {
 
     const result = rows.map((row) => ({
       ...row,
-      files_changed: JSON.parse(row.files_changed || "[]"),
-      metadata: JSON.parse(row.metadata || "{}"),
+      files_changed: safeJsonParse<string[]>(row.files_changed, []),
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
     }));
 
     // Cache the result
@@ -650,10 +732,19 @@ export class ConversationStorage {
    */
   async storeMistakes(mistakes: Mistake[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO mistakes
+      INSERT INTO mistakes
       (id, conversation_id, message_id, mistake_type, what_went_wrong,
        correction, user_correction_message, files_affected, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        conversation_id = excluded.conversation_id,
+        message_id = excluded.message_id,
+        mistake_type = excluded.mistake_type,
+        what_went_wrong = excluded.what_went_wrong,
+        correction = excluded.correction,
+        user_correction_message = excluded.user_correction_message,
+        files_affected = excluded.files_affected,
+        timestamp = excluded.timestamp
     `);
 
     this.db.transaction(() => {
@@ -687,10 +778,18 @@ export class ConversationStorage {
    */
   async storeRequirements(requirements: Requirement[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO requirements
+      INSERT INTO requirements
       (id, type, description, rationale, affects_components,
        conversation_id, message_id, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        type = excluded.type,
+        description = excluded.description,
+        rationale = excluded.rationale,
+        affects_components = excluded.affects_components,
+        conversation_id = excluded.conversation_id,
+        message_id = excluded.message_id,
+        timestamp = excluded.timestamp
     `);
 
     this.db.transaction(() => {
@@ -723,10 +822,18 @@ export class ConversationStorage {
    */
   async storeValidations(validations: Validation[]): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO validations
+      INSERT INTO validations
       (id, conversation_id, what_was_tested, test_command, result,
        performance_data, files_tested, timestamp)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        conversation_id = excluded.conversation_id,
+        what_was_tested = excluded.what_was_tested,
+        test_command = excluded.test_command,
+        result = excluded.result,
+        performance_data = excluded.performance_data,
+        files_tested = excluded.files_tested,
+        timestamp = excluded.timestamp
     `);
 
     this.db.transaction(() => {

@@ -33,6 +33,7 @@ import { pathToProjectFolderName } from "../utils/sanitization.js";
 import { DeletionService } from "../storage/DeletionService.js";
 import { readdirSync } from "fs";
 import { join } from "path";
+import { safeJsonParse } from "../utils/safeJson.js";
 
 /**
  * Default similarity score used when semantic search is not available.
@@ -70,6 +71,7 @@ const DEFAULT_SIMILARITY_SCORE = 1.0;
 export class ToolHandlers {
   private migration: ProjectMigration;
   private lastAutoIndex: number = 0;
+  private autoIndexPromise: Promise<void> | null = null;
   private readonly AUTO_INDEX_COOLDOWN = 60000; // 1 minute
 
   /**
@@ -85,19 +87,36 @@ export class ToolHandlers {
 
   /**
    * Automatically run incremental indexing if cooldown has expired.
+   * Uses a mutex (autoIndexPromise) to coalesce concurrent calls and prevent stampede.
    * This ensures search results include recent conversations without
    * requiring manual indexing.
    */
   private async maybeAutoIndex(): Promise<void> {
     const now = Date.now();
-    if (now - this.lastAutoIndex > this.AUTO_INDEX_COOLDOWN) {
-      try {
-        await this.indexAllProjects({ incremental: true });
-        this.lastAutoIndex = now;
-      } catch (error) {
-        // Log but don't fail - search should still work with existing index
-        console.error('Auto-indexing failed:', error);
-      }
+
+    // If indexing is already in progress, wait for it
+    if (this.autoIndexPromise) {
+      await this.autoIndexPromise;
+      return;
+    }
+
+    // Check cooldown
+    if (now - this.lastAutoIndex <= this.AUTO_INDEX_COOLDOWN) {
+      return;
+    }
+
+    // Update timestamp immediately to prevent concurrent triggers
+    this.lastAutoIndex = now;
+
+    try {
+      // Create the indexing promise and store it for coalescing
+      this.autoIndexPromise = this.indexAllProjects({ incremental: true }).then(() => {});
+      await this.autoIndexPromise;
+    } catch (error) {
+      // Log but don't fail - search should still work with existing index
+      console.error('Auto-indexing failed:', error);
+    } finally {
+      this.autoIndexPromise = null;
     }
   }
 
@@ -901,7 +920,7 @@ export class ToolHandlers {
         author: c.author,
         timestamp: new Date(c.timestamp).toISOString(),
         branch: c.branch,
-        files_changed: JSON.parse(c.files_changed || "[]"),
+        files_changed: safeJsonParse<string[]>(c.files_changed, []),
         conversation_id: c.conversation_id,
       })),
       total_found: results.length,
@@ -1010,7 +1029,7 @@ export class ToolHandlers {
         what_went_wrong: m.what_went_wrong,
         correction: m.correction,
         user_correction_message: m.user_correction_message,
-        files_affected: JSON.parse(m.files_affected || "[]"),
+        files_affected: safeJsonParse<string[]>(m.files_affected, []),
         timestamp: new Date(m.timestamp).toISOString(),
       })),
       total_found: results.length,
@@ -1079,7 +1098,7 @@ export class ToolHandlers {
         type: r.type,
         description: r.description,
         rationale: r.rationale,
-        affects_components: JSON.parse(r.affects_components || "[]"),
+        affects_components: safeJsonParse<string[]>(r.affects_components, []),
         timestamp: new Date(r.timestamp).toISOString(),
       })),
       total_found: requirements.length,
@@ -1098,7 +1117,7 @@ export class ToolHandlers {
    * - `file_path`: Optional filter by file path
    * - `limit`: Maximum number of results (default: 20)
    * - `offset`: Skip N results for pagination (default: 0)
-   * - `include_content`: Include tool content in response (default: true, false for metadata only)
+   * - `include_content`: Include tool content in response (default: false for security, set true to include)
    * - `max_content_length`: Maximum characters per content field (default: 500)
    * - `date_range`: Filter by timestamp range [start, end]
    * - `conversation_id`: Filter by specific conversation
@@ -1142,7 +1161,7 @@ export class ToolHandlers {
       file_path,
       limit = 20,
       offset = 0,
-      include_content = true,
+      include_content = false,
       max_content_length = 500,
       date_range,
       conversation_id,
@@ -1222,7 +1241,7 @@ export class ToolHandlers {
       file_path,
       tool_uses: toolUses.map((t) => {
         // Parse tool input
-        const toolInput = JSON.parse(t.tool_input || "{}");
+        const toolInput = safeJsonParse<Record<string, unknown>>(t.tool_input, {});
 
         // Build result object based on include_content setting
         const result: Types.ToolUseResult['result'] = {
@@ -1561,7 +1580,7 @@ export class ToolHandlers {
         commit_hash: c.hash,
         message: c.message,
         timestamp: new Date(c.timestamp).toISOString(),
-        files_affected: JSON.parse(c.files_changed || "[]"),
+        files_affected: safeJsonParse<string[]>(c.files_changed, []),
       }));
       totalItems += recalled.commits.length;
 
@@ -2079,101 +2098,107 @@ export class ToolHandlers {
           // Create dedicated database for Codex
           const codexDbPath = join(codex_path, ".codex-conversations-memory.db");
           const codexDb = new SQLiteManager({ dbPath: codexDbPath });
-          const codexStorage = new ConversationStorage(codexDb);
 
-          // Get last indexed time for incremental mode
-          let codexLastIndexedMs: number | undefined;
-          if (incremental) {
-            const existingProject = globalIndex.getProject(codex_path);
-            if (existingProject) {
-              codexLastIndexedMs = existingProject.last_indexed;
-            }
-          }
-
-          // Parse Codex sessions
-          const parser = new CodexConversationParser();
-          const parseResult = parser.parseSession(codex_path, undefined, codexLastIndexedMs);
-
-          // Store all parsed data
-          await codexStorage.storeConversations(parseResult.conversations);
-          await codexStorage.storeMessages(parseResult.messages);
-          await codexStorage.storeToolUses(parseResult.tool_uses);
-          await codexStorage.storeToolResults(parseResult.tool_results);
-          await codexStorage.storeFileEdits(parseResult.file_edits);
-          await codexStorage.storeThinkingBlocks(parseResult.thinking_blocks);
-
-          // Extract and store decisions
-          const decisionExtractor = new DecisionExtractor();
-          const decisions = decisionExtractor.extractDecisions(
-            parseResult.messages,
-            parseResult.thinking_blocks
-          );
-          await codexStorage.storeDecisions(decisions);
-
-          // Extract and store mistakes
-          const mistakeExtractor = new MistakeExtractor();
-          const mistakes = mistakeExtractor.extractMistakes(
-            parseResult.messages,
-            parseResult.tool_results
-          );
-          await codexStorage.storeMistakes(mistakes);
-
-          // Generate embeddings for semantic search
           try {
-            const semanticSearch = new SemanticSearch(codexDb);
-            await semanticSearch.indexMessages(parseResult.messages, incremental);
-            await semanticSearch.indexDecisions(decisions, incremental);
-            console.error(`✓ Generated embeddings for Codex project`);
-          } catch (embedError) {
-            console.error("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
-            console.error("   FTS fallback will be used for search");
+            const codexStorage = new ConversationStorage(codexDb);
+
+            // Get last indexed time for incremental mode
+            let codexLastIndexedMs: number | undefined;
+            if (incremental) {
+              const existingProject = globalIndex.getProject(codex_path);
+              if (existingProject) {
+                codexLastIndexedMs = existingProject.last_indexed;
+              }
+            }
+
+            // Parse Codex sessions
+            const parser = new CodexConversationParser();
+            const parseResult = parser.parseSession(codex_path, undefined, codexLastIndexedMs);
+
+            // Store all parsed data (skip FTS rebuild for performance, will rebuild once at end)
+            await codexStorage.storeConversations(parseResult.conversations);
+            await codexStorage.storeMessages(parseResult.messages, true);
+            await codexStorage.storeToolUses(parseResult.tool_uses);
+            await codexStorage.storeToolResults(parseResult.tool_results);
+            await codexStorage.storeFileEdits(parseResult.file_edits);
+            await codexStorage.storeThinkingBlocks(parseResult.thinking_blocks);
+
+            // Extract and store decisions
+            const decisionExtractor = new DecisionExtractor();
+            const decisions = decisionExtractor.extractDecisions(
+              parseResult.messages,
+              parseResult.thinking_blocks
+            );
+            await codexStorage.storeDecisions(decisions, true);
+
+            // Rebuild FTS indexes once after all data is stored
+            codexStorage.rebuildAllFts();
+
+            // Extract and store mistakes
+            const mistakeExtractor = new MistakeExtractor();
+            const mistakes = mistakeExtractor.extractMistakes(
+              parseResult.messages,
+              parseResult.tool_results
+            );
+            await codexStorage.storeMistakes(mistakes);
+
+            // Generate embeddings for semantic search
+            try {
+              const semanticSearch = new SemanticSearch(codexDb);
+              await semanticSearch.indexMessages(parseResult.messages, incremental);
+              await semanticSearch.indexDecisions(decisions, incremental);
+              console.error(`✓ Generated embeddings for Codex project`);
+            } catch (embedError) {
+              console.error("⚠️ Embedding generation failed for Codex:", (embedError as Error).message);
+              console.error("   FTS fallback will be used for search");
+            }
+
+            // Get stats from the database
+            const stats = codexDb.getDatabase()
+              .prepare("SELECT COUNT(*) as count FROM conversations")
+              .get() as { count: number };
+
+            const messageStats = codexDb.getDatabase()
+              .prepare("SELECT COUNT(*) as count FROM messages")
+              .get() as { count: number };
+
+            const decisionStats = codexDb.getDatabase()
+              .prepare("SELECT COUNT(*) as count FROM decisions")
+              .get() as { count: number };
+
+            const mistakeStats = codexDb.getDatabase()
+              .prepare("SELECT COUNT(*) as count FROM mistakes")
+              .get() as { count: number };
+
+            // Register in global index
+            globalIndex.registerProject({
+              project_path: codex_path,
+              source_type: "codex",
+              db_path: codexDbPath,
+              message_count: messageStats.count,
+              conversation_count: stats.count,
+              decision_count: decisionStats.count,
+              mistake_count: mistakeStats.count,
+              metadata: {
+                indexed_folders: parseResult.indexed_folders || [],
+              },
+            });
+
+            projects.push({
+              project_path: codex_path,
+              source_type: "codex",
+              message_count: messageStats.count,
+              conversation_count: stats.count,
+            });
+
+            totalMessages += messageStats.count;
+            totalConversations += stats.count;
+            totalDecisions += decisionStats.count;
+            totalMistakes += mistakeStats.count;
+          } finally {
+            // Always close the Codex database to prevent handle leaks
+            codexDb.close();
           }
-
-          // Get stats from the database
-          const stats = codexDb.getDatabase()
-            .prepare("SELECT COUNT(*) as count FROM conversations")
-            .get() as { count: number };
-
-          const messageStats = codexDb.getDatabase()
-            .prepare("SELECT COUNT(*) as count FROM messages")
-            .get() as { count: number };
-
-          const decisionStats = codexDb.getDatabase()
-            .prepare("SELECT COUNT(*) as count FROM decisions")
-            .get() as { count: number };
-
-          const mistakeStats = codexDb.getDatabase()
-            .prepare("SELECT COUNT(*) as count FROM mistakes")
-            .get() as { count: number };
-
-          // Register in global index
-          globalIndex.registerProject({
-            project_path: codex_path,
-            source_type: "codex",
-            db_path: codexDbPath,
-            message_count: messageStats.count,
-            conversation_count: stats.count,
-            decision_count: decisionStats.count,
-            mistake_count: mistakeStats.count,
-            metadata: {
-              indexed_folders: parseResult.indexed_folders || [],
-            },
-          });
-
-          projects.push({
-            project_path: codex_path,
-            source_type: "codex",
-            message_count: messageStats.count,
-            conversation_count: stats.count,
-          });
-
-          totalMessages += messageStats.count;
-          totalConversations += stats.count;
-          totalDecisions += decisionStats.count;
-          totalMistakes += mistakeStats.count;
-
-          // Close the Codex database
-          codexDb.close();
         } catch (error) {
           errors.push({
             project_path: codex_path,
@@ -2206,105 +2231,110 @@ export class ToolHandlers {
               // Create dedicated database for this Claude Code project
               const projectDbPath = join(folderPath, ".claude-conversations-memory.db");
               const projectDb = new SQLiteManager({ dbPath: projectDbPath });
-              const projectStorage = new ConversationStorage(projectDb);
 
-              // Get last indexed time for incremental mode
-              let lastIndexedMs: number | undefined;
-              if (incremental) {
-                const existingProject = globalIndex.getProject(folderPath);
-                if (existingProject) {
-                  lastIndexedMs = existingProject.last_indexed;
-                }
-              }
-
-              // Parse Claude Code conversations directly from this folder
-              const parser = new ConversationParser();
-              const parseResult = parser.parseFromFolder(folderPath, undefined, lastIndexedMs);
-
-              // Skip empty projects
-              if (parseResult.messages.length === 0) {
-                projectDb.close();
-                continue;
-              }
-
-              // Store all parsed data
-              await projectStorage.storeConversations(parseResult.conversations);
-              await projectStorage.storeMessages(parseResult.messages);
-              await projectStorage.storeToolUses(parseResult.tool_uses);
-              await projectStorage.storeToolResults(parseResult.tool_results);
-              await projectStorage.storeFileEdits(parseResult.file_edits);
-              await projectStorage.storeThinkingBlocks(parseResult.thinking_blocks);
-
-              // Extract and store decisions
-              const decisionExtractor = new DecisionExtractor();
-              const decisions = decisionExtractor.extractDecisions(
-                parseResult.messages,
-                parseResult.thinking_blocks
-              );
-              await projectStorage.storeDecisions(decisions);
-
-              // Extract and store mistakes
-              const mistakeExtractor = new MistakeExtractor();
-              const mistakes = mistakeExtractor.extractMistakes(
-                parseResult.messages,
-                parseResult.tool_results
-              );
-              await projectStorage.storeMistakes(mistakes);
-
-              // Generate embeddings for semantic search
               try {
-                const { SemanticSearch } = await import("../search/SemanticSearch.js");
-                const semanticSearch = new SemanticSearch(projectDb);
-                await semanticSearch.indexMessages(parseResult.messages, incremental);
-                await semanticSearch.indexDecisions(decisions, incremental);
-                console.error(`✓ Generated embeddings for project: ${folder}`);
-              } catch (embedError) {
-                console.error(`⚠️ Embedding generation failed for ${folder}:`, (embedError as Error).message);
-                console.error("   FTS fallback will be used for search");
+                const projectStorage = new ConversationStorage(projectDb);
+
+                // Get last indexed time for incremental mode
+                let lastIndexedMs: number | undefined;
+                if (incremental) {
+                  const existingProject = globalIndex.getProject(folderPath);
+                  if (existingProject) {
+                    lastIndexedMs = existingProject.last_indexed;
+                  }
+                }
+
+                // Parse Claude Code conversations directly from this folder
+                const parser = new ConversationParser();
+                const parseResult = parser.parseFromFolder(folderPath, undefined, lastIndexedMs);
+
+                // Skip empty projects
+                if (parseResult.messages.length === 0) {
+                  continue;
+                }
+
+                // Store all parsed data (skip FTS rebuild for performance, will rebuild once at end)
+                await projectStorage.storeConversations(parseResult.conversations);
+                await projectStorage.storeMessages(parseResult.messages, true);
+                await projectStorage.storeToolUses(parseResult.tool_uses);
+                await projectStorage.storeToolResults(parseResult.tool_results);
+                await projectStorage.storeFileEdits(parseResult.file_edits);
+                await projectStorage.storeThinkingBlocks(parseResult.thinking_blocks);
+
+                // Extract and store decisions
+                const decisionExtractor = new DecisionExtractor();
+                const decisions = decisionExtractor.extractDecisions(
+                  parseResult.messages,
+                  parseResult.thinking_blocks
+                );
+                await projectStorage.storeDecisions(decisions, true);
+
+                // Rebuild FTS indexes once after all data is stored
+                projectStorage.rebuildAllFts();
+
+                // Extract and store mistakes
+                const mistakeExtractor = new MistakeExtractor();
+                const mistakes = mistakeExtractor.extractMistakes(
+                  parseResult.messages,
+                  parseResult.tool_results
+                );
+                await projectStorage.storeMistakes(mistakes);
+
+                // Generate embeddings for semantic search
+                try {
+                  const { SemanticSearch } = await import("../search/SemanticSearch.js");
+                  const semanticSearch = new SemanticSearch(projectDb);
+                  await semanticSearch.indexMessages(parseResult.messages, incremental);
+                  await semanticSearch.indexDecisions(decisions, incremental);
+                  console.error(`✓ Generated embeddings for project: ${folder}`);
+                } catch (embedError) {
+                  console.error(`⚠️ Embedding generation failed for ${folder}:`, (embedError as Error).message);
+                  console.error("   FTS fallback will be used for search");
+                }
+
+                // Get stats from the database
+                const stats = projectDb.getDatabase()
+                  .prepare("SELECT COUNT(*) as count FROM conversations")
+                  .get() as { count: number };
+
+                const messageStats = projectDb.getDatabase()
+                  .prepare("SELECT COUNT(*) as count FROM messages")
+                  .get() as { count: number };
+
+                const decisionStats = projectDb.getDatabase()
+                  .prepare("SELECT COUNT(*) as count FROM decisions")
+                  .get() as { count: number };
+
+                const mistakeStats = projectDb.getDatabase()
+                  .prepare("SELECT COUNT(*) as count FROM mistakes")
+                  .get() as { count: number };
+
+                // Register in global index with the project-specific database path
+                globalIndex.registerProject({
+                  project_path: folderPath,
+                  source_type: "claude-code",
+                  db_path: projectDbPath,
+                  message_count: messageStats.count,
+                  conversation_count: stats.count,
+                  decision_count: decisionStats.count,
+                  mistake_count: mistakeStats.count,
+                });
+
+                projects.push({
+                  project_path: folderPath,
+                  source_type: "claude-code",
+                  message_count: messageStats.count,
+                  conversation_count: stats.count,
+                });
+
+                totalMessages += messageStats.count;
+                totalConversations += stats.count;
+                totalDecisions += decisionStats.count;
+                totalMistakes += mistakeStats.count;
+              } finally {
+                // Always close the project database to prevent handle leaks
+                projectDb.close();
               }
-
-              // Get stats from the database
-              const stats = projectDb.getDatabase()
-                .prepare("SELECT COUNT(*) as count FROM conversations")
-                .get() as { count: number };
-
-              const messageStats = projectDb.getDatabase()
-                .prepare("SELECT COUNT(*) as count FROM messages")
-                .get() as { count: number };
-
-              const decisionStats = projectDb.getDatabase()
-                .prepare("SELECT COUNT(*) as count FROM decisions")
-                .get() as { count: number };
-
-              const mistakeStats = projectDb.getDatabase()
-                .prepare("SELECT COUNT(*) as count FROM mistakes")
-                .get() as { count: number };
-
-              // Register in global index with the project-specific database path
-              globalIndex.registerProject({
-                project_path: folderPath,
-                source_type: "claude-code",
-                db_path: projectDbPath,
-                message_count: messageStats.count,
-                conversation_count: stats.count,
-                decision_count: decisionStats.count,
-                mistake_count: mistakeStats.count,
-              });
-
-              projects.push({
-                project_path: folderPath,
-                source_type: "claude-code",
-                message_count: messageStats.count,
-                conversation_count: stats.count,
-              });
-
-              totalMessages += messageStats.count;
-              totalConversations += stats.count;
-              totalDecisions += decisionStats.count;
-              totalMistakes += mistakeStats.count;
-
-              // Close the project database
-              projectDb.close();
             } catch (error) {
               errors.push({
                 project_path: folder,
@@ -2488,11 +2518,11 @@ export class ToolHandlers {
               decision_id: d.id,
               decision_text: d.decision_text,
               rationale: d.rationale,
-              alternatives_considered: JSON.parse(d.alternatives_considered || "[]"),
-              rejected_reasons: JSON.parse(d.rejected_reasons || "{}"),
+              alternatives_considered: safeJsonParse<string[]>(d.alternatives_considered, []),
+              rejected_reasons: safeJsonParse<Record<string, string>>(d.rejected_reasons, {}),
               context: d.context,
-              related_files: JSON.parse(d.related_files || "[]"),
-              related_commits: JSON.parse(d.related_commits || "[]"),
+              related_files: safeJsonParse<string[]>(d.related_files, []),
+              related_commits: safeJsonParse<string[]>(d.related_commits, []),
               timestamp: new Date(d.timestamp).toISOString(),
               similarity: DEFAULT_SIMILARITY_SCORE,
               project_path: project.project_path,
@@ -2578,7 +2608,7 @@ export class ToolHandlers {
               what_went_wrong: m.what_went_wrong,
               correction: m.correction,
               user_correction_message: m.user_correction_message,
-              files_affected: JSON.parse(m.files_affected || "[]"),
+              files_affected: safeJsonParse<string[]>(m.files_affected, []),
               timestamp: new Date(m.timestamp).toISOString(),
               project_path: project.project_path,
               source_type: project.source_type,

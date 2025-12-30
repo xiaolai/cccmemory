@@ -9,6 +9,7 @@ import { getEmbeddingGenerator } from "../embeddings/EmbeddingGenerator.js";
 import type { Message, Conversation } from "../parsers/ConversationParser.js";
 import type { Decision } from "../parsers/DecisionExtractor.js";
 import type { MessageRow, DecisionRow, ConversationRow } from "../types/ToolTypes.js";
+import { safeJsonParse } from "../utils/safeJson.js";
 
 export interface SearchFilter {
   date_range?: [number, number];
@@ -334,7 +335,7 @@ export class SemanticSearch {
       return {
         message: {
           ...row,
-          metadata: JSON.parse(row.metadata || "{}"),
+          metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
           is_sidechain: Boolean(row.is_sidechain),
         } as Message,
         conversation,
@@ -377,10 +378,10 @@ export class SemanticSearch {
       return {
         decision: {
           ...row,
-          alternatives_considered: JSON.parse(row.alternatives_considered || "[]"),
-          rejected_reasons: JSON.parse(row.rejected_reasons || "{}"),
-          related_files: JSON.parse(row.related_files || "[]"),
-          related_commits: JSON.parse(row.related_commits || "[]"),
+          alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+          rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+          related_files: safeJsonParse<string[]>(row.related_files, []),
+          related_commits: safeJsonParse<string[]>(row.related_commits, []),
         } as Decision,
         conversation,
         similarity: 0.5,
@@ -455,7 +456,7 @@ export class SemanticSearch {
 
     return {
       ...row,
-      metadata: JSON.parse(row.metadata || "{}"),
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
       is_sidechain: Boolean(row.is_sidechain),
     };
   }
@@ -474,7 +475,7 @@ export class SemanticSearch {
 
     return {
       ...row,
-      metadata: JSON.parse(row.metadata || "{}"),
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
     };
   }
 
@@ -490,10 +491,10 @@ export class SemanticSearch {
 
     return {
       ...row,
-      alternatives_considered: JSON.parse(row.alternatives_considered || "[]"),
-      rejected_reasons: JSON.parse(row.rejected_reasons || "{}"),
-      related_files: JSON.parse(row.related_files || "[]"),
-      related_commits: JSON.parse(row.related_commits || "[]"),
+      alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+      rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
+      related_files: safeJsonParse<string[]>(row.related_files, []),
+      related_commits: safeJsonParse<string[]>(row.related_commits, []),
     };
   }
 

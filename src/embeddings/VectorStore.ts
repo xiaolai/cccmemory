@@ -202,9 +202,15 @@ export class VectorStore {
   ): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO message_embeddings
+        `INSERT INTO message_embeddings
          (id, message_id, content, embedding, model_name, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           message_id = excluded.message_id,
+           content = excluded.content,
+           embedding = excluded.embedding,
+           model_name = excluded.model_name,
+           created_at = excluded.created_at`
       )
       .run(
         `msg_${messageId}`,
@@ -225,9 +231,13 @@ export class VectorStore {
   ): Promise<void> {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO decision_embeddings
+        `INSERT INTO decision_embeddings
          (id, decision_id, embedding, created_at)
-         VALUES (?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           decision_id = excluded.decision_id,
+           embedding = excluded.embedding,
+           created_at = excluded.created_at`
       )
       .run(
         `dec_${decisionId}`,

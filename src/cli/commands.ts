@@ -8,6 +8,7 @@ import { ToolHandlers } from "../tools/ToolHandlers.js";
 import { getSQLiteManager } from "../storage/SQLiteManager.js";
 import { showHelp, showCommandHelp } from "./help.js";
 import { ConfigManager } from "../embeddings/ConfigManager.js";
+import { getMcpStatus } from "../utils/McpConfig.js";
 import {
   getModelsByProvider,
   getAllModels,
@@ -1157,8 +1158,6 @@ async function handleRemoveMcp(): Promise<string> {
  * Handle mcp-status command - Show MCP server configuration status
  */
 function handleMcpStatus(): string {
-  const { getMcpStatus } = require("../utils/McpConfig.js");
-
   const status = getMcpStatus();
 
   const table = new Table({

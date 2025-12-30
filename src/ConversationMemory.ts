@@ -154,14 +154,15 @@ export class ConversationMemory {
       parseResult = this.filterMcpConversations(parseResult, options);
     }
 
-    // Store basic entities
+    // Store basic entities (skip FTS rebuild for performance, will rebuild once at end)
     await this.storage.storeConversations(parseResult.conversations);
-    await this.storage.storeMessages(parseResult.messages);
+    await this.storage.storeMessages(parseResult.messages, true);
     await this.storage.storeToolUses(parseResult.tool_uses);
     await this.storage.storeToolResults(parseResult.tool_results);
     await this.storage.storeFileEdits(parseResult.file_edits);
 
-    if (options.includeThinking !== false) {
+    // Only store thinking blocks if explicitly enabled (default: false for privacy)
+    if (options.includeThinking === true) {
       await this.storage.storeThinkingBlocks(parseResult.thinking_blocks);
     }
 
@@ -171,7 +172,10 @@ export class ConversationMemory {
       parseResult.messages,
       parseResult.thinking_blocks
     );
-    await this.storage.storeDecisions(decisions);
+    await this.storage.storeDecisions(decisions, true);
+
+    // Rebuild FTS indexes once after all data is stored
+    this.storage.rebuildAllFts();
 
     // Extract mistakes
     console.error("\n=== Extracting Mistakes ===");

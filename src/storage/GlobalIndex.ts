@@ -38,6 +38,7 @@ import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { nanoid } from "nanoid";
+import { safeJsonParse } from "../utils/safeJson.js";
 
 export interface ProjectMetadata {
   id: string;
@@ -251,7 +252,7 @@ export class GlobalIndex {
 
     return rows.map((row) => ({
       ...row,
-      metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
     }));
   }
 
@@ -285,7 +286,7 @@ export class GlobalIndex {
 
     return {
       ...row,
-      metadata: JSON.parse(row.metadata || "{}") as Record<string, unknown>,
+      metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
     };
   }
 

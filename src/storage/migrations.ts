@@ -102,16 +102,10 @@ export class MigrationManager {
 
     // Execute migration in a transaction
     this.db.transaction(() => {
-      // Execute the migration SQL
+      // Execute the migration SQL using db.exec() directly
+      // SQLite handles multiple statements and comments correctly
       if (migration.up && migration.up.trim()) {
-        const statements = migration.up
-          .split(";")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0 && !s.startsWith("--"));
-
-        for (const statement of statements) {
-          this.db.exec(statement);
-        }
+        this.db.exec(migration.up);
       }
 
       // Record migration

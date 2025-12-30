@@ -290,8 +290,8 @@ export const TOOLS = {
         },
         include_content: {
           type: "boolean",
-          description: "Include tool result content, stdout, stderr (default: true). Set false for metadata-only response (tool names, timestamps, success/failure status).",
-          default: true,
+          description: "Include tool result content, stdout, stderr (default: false for security). Set true to include content (tool names, timestamps, success/failure status).",
+          default: false,
         },
         max_content_length: {
           type: "number",

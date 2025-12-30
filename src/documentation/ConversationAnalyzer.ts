@@ -5,6 +5,7 @@
 import type { SQLiteManager } from '../storage/SQLiteManager.js';
 import type { ConversationData, Decision, Mistake, Requirement, FileEdit, GitCommit } from './types.js';
 import type { DecisionRow, MistakeRow, RequirementRow, GitCommitRow } from '../types/ToolTypes.js';
+import { safeJsonParse } from '../utils/safeJson.js';
 
 export class ConversationAnalyzer {
   constructor(private db: SQLiteManager) {}
@@ -57,11 +58,11 @@ export class ConversationAnalyzer {
       message_id: row.message_id,
       decision_text: row.decision_text,
       rationale: row.rationale || '',
-      alternatives_considered: JSON.parse(row.alternatives_considered || '[]'),
-      rejected_reasons: JSON.parse(row.rejected_reasons || '{}'),
+      alternatives_considered: safeJsonParse<string[]>(row.alternatives_considered, []),
+      rejected_reasons: safeJsonParse<Record<string, string>>(row.rejected_reasons, {}),
       context: row.context,
-      related_files: JSON.parse(row.related_files || '[]'),
-      related_commits: JSON.parse(row.related_commits || '[]'),
+      related_files: safeJsonParse<string[]>(row.related_files, []),
+      related_commits: safeJsonParse<string[]>(row.related_commits, []),
       timestamp: row.timestamp
     }));
   }
@@ -92,7 +93,7 @@ export class ConversationAnalyzer {
       why_it_happened: '',
       how_it_was_fixed: row.correction || '',
       lesson_learned: row.user_correction_message || '',
-      related_files: JSON.parse(row.files_affected || '[]'),
+      related_files: safeJsonParse<string[]>(row.files_affected, []),
       severity: row.mistake_type || 'general',
       timestamp: row.timestamp
     }));
@@ -122,7 +123,7 @@ export class ConversationAnalyzer {
       requirement_type: row.type,
       description: row.description,
       rationale: row.rationale || '',
-      related_files: JSON.parse(row.affects_components || '[]'),
+      related_files: safeJsonParse<string[]>(row.affects_components, []),
       timestamp: row.timestamp
     }));
   }
@@ -180,7 +181,7 @@ export class ConversationAnalyzer {
       message: row.message,
       author: row.author || 'Unknown',
       timestamp: row.timestamp,
-      files_changed: JSON.parse(row.files_changed || '[]')
+      files_changed: safeJsonParse<string[]>(row.files_changed, [])
     }));
   }
 }
