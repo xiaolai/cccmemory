@@ -294,6 +294,12 @@ export class SemanticSearch {
         conv_updated_at: number;
       }>;
 
+      // Fall back to FTS if vector search returned no results
+      if (rows.length === 0) {
+        console.error("Vector search returned no decision results - falling back to FTS");
+        return this.fallbackDecisionSearch(query, limit);
+      }
+
       return rows.map((row) => ({
         decision: {
           id: row.id,
