@@ -184,8 +184,14 @@ export class MistakeExtractor {
       const message = messages.find((m) => m.id === result.message_id);
       if (!message) {continue;}
 
-      // Extract error details
-      const errorContent = result.stderr || result.content || "";
+      // Combine ALL error sources for better context
+      // stderr might just have "exit code 255" while content has the actual error
+      const errorParts: string[] = [];
+      if (result.stderr) {errorParts.push(result.stderr);}
+      if (result.stdout) {errorParts.push(result.stdout);}
+      if (result.content) {errorParts.push(result.content);}
+      const errorContent = errorParts.join("\n");
+
       const mistakeType = this.classifyMistakeType(errorContent);
 
       mistakes.push({
@@ -310,14 +316,47 @@ export class MistakeExtractor {
   }
 
   /**
-   * Summarize error message
+   * Summarize error message - find the most descriptive error line
    */
   private summarizeError(errorText: string): string {
-    // Take first line or first 200 characters
-    const firstLine = errorText.split("\n")[0];
-    return firstLine.length > 200
-      ? firstLine.substring(0, 200) + "..."
-      : firstLine;
+    const lines = errorText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) {return "Unknown error";}
+
+    // Patterns that indicate a descriptive error (prioritize these)
+    const descriptivePatterns = [
+      /permission denied/i,
+      /host key verification failed/i,
+      /connection refused/i,
+      /no such file or directory/i,
+      /command not found/i,
+      /authentication failed/i,
+      /timeout/i,
+      /could not resolve/i,
+      /network is unreachable/i,
+      /operation not permitted/i,
+      /access denied/i,
+      /invalid argument/i,
+      /no space left/i,
+      /disk quota exceeded/i,
+      /broken pipe/i,
+      /connection reset/i,
+      /refused|denied|failed|error:|fatal:/i,
+    ];
+
+    // Find the first line matching a descriptive pattern
+    for (const line of lines) {
+      for (const pattern of descriptivePatterns) {
+        if (pattern.test(line)) {
+          return line.length > 300 ? line.substring(0, 300) + "..." : line;
+        }
+      }
+    }
+
+    // Skip generic "exit code" lines if there's more content
+    const nonExitCodeLines = lines.filter(l => !/^exit\s*code\s*\d+$/i.test(l));
+    const bestLine = nonExitCodeLines.length > 0 ? nonExitCodeLines[0] : lines[0];
+
+    return bestLine.length > 300 ? bestLine.substring(0, 300) + "..." : bestLine;
   }
 
   /**
