@@ -388,6 +388,69 @@ export class SQLiteManager {
         throw error;
       }
     }
+
+    // Migration 3 -> 4: Add mistake_embeddings and mistakes_fts for semantic search
+    if (currentVersion < 4) {
+      try {
+        console.error(
+          "Applying migration v4: Adding mistake semantic search support..."
+        );
+
+        // Create mistake_embeddings table
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS mistake_embeddings (
+            id TEXT PRIMARY KEY,
+            mistake_id TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
+          )
+        `);
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS idx_mistake_embeddings_mistake_id ON mistake_embeddings(mistake_id)"
+        );
+
+        // Create mistakes_fts FTS5 table (standalone, not content-synced)
+        this.db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS mistakes_fts USING fts5(
+            id,
+            what_went_wrong,
+            correction,
+            mistake_type
+          )
+        `);
+
+        // Populate FTS from existing mistakes
+        try {
+          this.db.exec(`
+            INSERT INTO mistakes_fts(id, what_went_wrong, correction, mistake_type)
+              SELECT id, what_went_wrong, COALESCE(correction, ''), mistake_type FROM mistakes
+          `);
+          console.error("Mistakes FTS index populated successfully");
+        } catch (ftsError) {
+          console.error(
+            "Mistakes FTS populate warning:",
+            (ftsError as Error).message
+          );
+        }
+
+        // Record migration
+        this.db
+          .prepare(
+            "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)"
+          )
+          .run(
+            4,
+            Date.now(),
+            "Add mistake_embeddings and mistakes_fts for semantic search"
+          );
+
+        console.error("Migration v4 applied successfully");
+      } catch (error) {
+        console.error("Error applying migration v4:", error);
+        throw error;
+      }
+    }
   }
 
   /**

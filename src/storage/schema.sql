@@ -305,14 +305,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS decisions_fts USING fts5(
   content_rowid=rowid
 );
 
--- Table 19: Full-Text Search Index for Mistakes
+-- Table 19: Full-Text Search Index for Mistakes (standalone, not content-synced)
 CREATE VIRTUAL TABLE IF NOT EXISTS mistakes_fts USING fts5(
-  id UNINDEXED,
+  id,
   what_went_wrong,
   correction,
-  mistake_type,
-  content=mistakes,
-  content_rowid=rowid
+  mistake_type
 );
 
 -- ==================================================

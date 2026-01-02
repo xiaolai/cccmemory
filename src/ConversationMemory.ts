@@ -224,6 +224,7 @@ export class ConversationMemory {
     try {
       await this.semanticSearch.indexMessages(parseResult.messages);
       await this.semanticSearch.indexDecisions(decisions);
+      await this.semanticSearch.indexMistakes(mistakes);
       console.error("✓ Semantic indexing complete");
     } catch (error) {
       embeddingError = (error as Error).message;

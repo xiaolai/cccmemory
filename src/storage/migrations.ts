@@ -65,6 +65,36 @@ export const migrations: Migration[] = [
       )
     `,
   },
+  {
+    version: 4,
+    description: "Add mistake_embeddings table and mistakes_fts for semantic search",
+    up: `
+      -- Create mistake_embeddings table for semantic search
+      CREATE TABLE IF NOT EXISTS mistake_embeddings (
+        id TEXT PRIMARY KEY,
+        mistake_id TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_mistake_embeddings_mistake_id ON mistake_embeddings(mistake_id);
+
+      -- Create mistakes_fts FTS5 table (standalone, not content-synced)
+      CREATE VIRTUAL TABLE IF NOT EXISTS mistakes_fts USING fts5(
+        id,
+        what_went_wrong,
+        correction,
+        mistake_type
+      );
+      -- Populate FTS from existing mistakes
+      INSERT INTO mistakes_fts(id, what_went_wrong, correction, mistake_type)
+        SELECT id, what_went_wrong, COALESCE(correction, ''), mistake_type FROM mistakes
+    `,
+    down: `
+      DROP TABLE IF EXISTS mistakes_fts;
+      DROP TABLE IF EXISTS mistake_embeddings
+    `,
+  },
 ];
 
 export class MigrationManager {
