@@ -286,13 +286,26 @@ export class ConversationStorage {
         metadata = excluded.metadata
     `);
 
-    // Build a set of message IDs for FK validation
+    // Build a set of message IDs for FK validation (from current batch)
     const messageIds = new Set(messages.map(m => m.id));
 
-    // Also check existing messages in DB to allow parent references to pre-existing messages
-    const existingIds = this.db.prepare("SELECT id FROM messages").all() as { id: string }[];
-    for (const row of existingIds) {
-      messageIds.add(row.id);
+    // Collect parent_ids that need DB lookup (not in current batch)
+    const parentIdsToCheck = new Set<string>();
+    for (const msg of messages) {
+      if (msg.parent_id && !messageIds.has(msg.parent_id)) {
+        parentIdsToCheck.add(msg.parent_id);
+      }
+    }
+
+    // Only query DB for specific parent_ids we need (O(k) where k = unique parent refs)
+    if (parentIdsToCheck.size > 0) {
+      const placeholders = Array.from(parentIdsToCheck).map(() => '?').join(',');
+      const existingIds = this.db
+        .prepare(`SELECT id FROM messages WHERE id IN (${placeholders})`)
+        .all(...parentIdsToCheck) as { id: string }[];
+      for (const row of existingIds) {
+        messageIds.add(row.id);
+      }
     }
 
     this.db.transaction(() => {

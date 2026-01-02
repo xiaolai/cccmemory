@@ -2,6 +2,8 @@ export default {
   preset: 'ts-jest/presets/default-esm',
   testEnvironment: 'node',
   extensionsToTreatAsEsm: ['.ts'],
+  // Run tests sequentially to avoid SQLite database locking issues
+  maxWorkers: 1,
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
@@ -34,5 +36,6 @@ export default {
     },
   },
   setupFilesAfterEnv: ['<rootDir>/src/__tests__/setup.ts'],
-  testTimeout: 10000,
+  // Increase timeout for tests that involve embedding initialization
+  testTimeout: 30000,
 };

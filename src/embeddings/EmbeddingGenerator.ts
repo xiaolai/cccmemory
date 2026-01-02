@@ -14,11 +14,41 @@ import { TransformersEmbeddings } from "./providers/TransformersEmbeddings.js";
  */
 export class EmbeddingGenerator {
   private static instance: EmbeddingProvider | null = null;
+  private static initializationPromise: Promise<EmbeddingProvider> | null = null;
 
   /**
    * Get or create embedding provider based on configuration
+   * Uses promise-based mutex to prevent concurrent initialization race condition
    */
   static async getProvider(): Promise<EmbeddingProvider> {
+    // Fast path: already initialized
+    if (this.instance) {
+      return this.instance;
+    }
+
+    // If initialization is in progress, wait for it
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    // Start initialization with mutex
+    this.initializationPromise = this.initializeProvider();
+
+    try {
+      const provider = await this.initializationPromise;
+      return provider;
+    } catch (error) {
+      // Reset on failure so next call can retry
+      this.initializationPromise = null;
+      throw error;
+    }
+  }
+
+  /**
+   * Internal initialization logic (called once via mutex)
+   */
+  private static async initializeProvider(): Promise<EmbeddingProvider> {
+    // Double-check after acquiring mutex
     if (this.instance) {
       return this.instance;
     }
@@ -128,6 +158,7 @@ export class EmbeddingGenerator {
    */
   static reset(): void {
     this.instance = null;
+    this.initializationPromise = null;
   }
 
   /**

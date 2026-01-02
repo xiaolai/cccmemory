@@ -443,17 +443,34 @@ export class ToolHandlers {
       const { GlobalIndex } = await import("../storage/GlobalIndex.js");
       const { SQLiteManager } = await import("../storage/SQLiteManager.js");
       const { SemanticSearch } = await import("../search/SemanticSearch.js");
+      const { getEmbeddingGenerator } = await import("../embeddings/EmbeddingGenerator.js");
 
       const globalIndex = new GlobalIndex();
       const projects = globalIndex.getAllProjects();
       const allResults: Types.SearchResult[] = [];
+
+      // Pre-compute query embedding once for all projects
+      let queryEmbedding: Float32Array | undefined;
+      try {
+        const embedder = await getEmbeddingGenerator();
+        if (embedder.isAvailable()) {
+          queryEmbedding = await embedder.embed(query);
+        }
+      } catch (_embeddingError) {
+        // Fall back to FTS
+      }
 
       for (const project of projects) {
         let projectDb: SQLiteManager | null = null;
         try {
           projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
           const semanticSearch = new SemanticSearch(projectDb);
-          const localResults = await semanticSearch.searchConversations(query, limit + offset);
+          const localResults = await semanticSearch.searchConversations(
+            query,
+            limit + offset,
+            undefined,
+            queryEmbedding
+          );
 
           const filteredResults = date_range
             ? localResults.filter((r: { message: { timestamp: number } }) => {
@@ -2691,6 +2708,7 @@ export class ToolHandlers {
     const { GlobalIndex } = await import("../storage/GlobalIndex.js");
     const { SQLiteManager } = await import("../storage/SQLiteManager.js");
     const { SemanticSearch } = await import("../search/SemanticSearch.js");
+    const { getEmbeddingGenerator } = await import("../embeddings/EmbeddingGenerator.js");
     const typedArgs = args as unknown as Types.SearchAllConversationsArgs;
     const { query, limit = 20, offset = 0, date_range, source_type = "all" } = typedArgs;
 
@@ -2701,7 +2719,19 @@ export class ToolHandlers {
         source_type === "all" ? undefined : source_type
       );
 
+      // Pre-compute query embedding once for all projects (major optimization)
+      let queryEmbedding: Float32Array | undefined;
+      try {
+        const embedder = await getEmbeddingGenerator();
+        if (embedder.isAvailable()) {
+          queryEmbedding = await embedder.embed(query);
+        }
+      } catch (_embeddingError) {
+        // Fall back to FTS in each project
+      }
+
       const allResults: Types.GlobalSearchResult[] = [];
+      const failedProjects: string[] = [];
       let claudeCodeResults = 0;
       let codexResults = 0;
 
@@ -2712,9 +2742,13 @@ export class ToolHandlers {
           projectDb = new SQLiteManager({ dbPath: project.db_path, readOnly: true });
           const semanticSearch = new SemanticSearch(projectDb);
 
-          // Search this specific project's database
-          // Fetch limit+offset to properly support global pagination after merge
-          const localResults = await semanticSearch.searchConversations(query, limit + offset);
+          // Search using pre-computed embedding (avoids re-embedding per project)
+          const localResults = await semanticSearch.searchConversations(
+            query,
+            limit + offset,
+            undefined,
+            queryEmbedding
+          );
 
           // Filter by date range if specified
           const filteredResults = date_range
@@ -2745,8 +2779,9 @@ export class ToolHandlers {
               codexResults++;
             }
           }
-        } catch (_error) {
-          // Skip projects that fail to search
+        } catch (error) {
+          // Track failed projects instead of silently ignoring
+          failedProjects.push(`${project.project_path}: ${(error as Error).message}`);
           continue;
         } finally {
           // Close project database
@@ -2760,6 +2795,7 @@ export class ToolHandlers {
       const sortedResults = allResults.sort((a, b) => b.similarity - a.similarity);
       const paginatedResults = sortedResults.slice(offset, offset + limit);
 
+      const successfulProjects = projects.length - failedProjects.length;
       return {
         query,
         results: paginatedResults,
@@ -2767,11 +2803,15 @@ export class ToolHandlers {
         has_more: offset + limit < sortedResults.length,
         offset,
         projects_searched: projects.length,
+        projects_succeeded: successfulProjects,
+        failed_projects: failedProjects.length > 0 ? failedProjects : undefined,
         search_stats: {
           claude_code_results: claudeCodeResults,
           codex_results: codexResults,
         },
-        message: `Found ${paginatedResults.length} result(s) across ${projects.length} project(s)`,
+        message: failedProjects.length > 0
+          ? `Found ${paginatedResults.length} result(s) across ${successfulProjects}/${projects.length} project(s). ${failedProjects.length} project(s) failed.`
+          : `Found ${paginatedResults.length} result(s) across ${projects.length} project(s)`,
       };
     } finally {
       // Ensure GlobalIndex is always closed

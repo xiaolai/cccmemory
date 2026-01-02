@@ -440,22 +440,27 @@ export class SemanticSearch {
 
   /**
    * Search conversations using natural language query
+   * @param query - The search query text
+   * @param limit - Maximum results to return
+   * @param filter - Optional filter criteria
+   * @param precomputedEmbedding - Optional pre-computed embedding to avoid re-embedding
    */
   async searchConversations(
     query: string,
     limit: number = 10,
-    filter?: SearchFilter
+    filter?: SearchFilter,
+    precomputedEmbedding?: Float32Array
   ): Promise<SearchResult[]> {
     const embedder = await getEmbeddingGenerator();
 
-    if (!embedder.isAvailable()) {
+    if (!embedder.isAvailable() && !precomputedEmbedding) {
       console.error("Embeddings not available - falling back to full-text search");
       return this.fallbackFullTextSearch(query, limit, filter);
     }
 
     try {
-      // Generate query embedding
-      const queryEmbedding = await embedder.embed(query);
+      // Use pre-computed embedding if provided, otherwise generate
+      const queryEmbedding = precomputedEmbedding ?? await embedder.embed(query);
 
       // Search vector store
       const vectorResults = await this.vectorStore.searchMessages(

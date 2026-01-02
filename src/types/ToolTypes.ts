@@ -655,6 +655,8 @@ export interface SearchAllConversationsResponse {
   has_more: boolean;
   offset: number;
   projects_searched: number;
+  projects_succeeded?: number;
+  failed_projects?: string[];
   search_stats: {
     claude_code_results: number;
     codex_results: number;
