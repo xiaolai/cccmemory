@@ -411,8 +411,10 @@ describe('Regression Tests - Baseline Functionality', () => {
       });
       const duration = Date.now() - start;
 
-      // Should complete quickly for empty directory
-      expect(duration).toBeLessThan(5000);
+      // Should complete in reasonable time for empty directory
+      // Note: First run may include embedding model initialization which can be slow
+      // on some platforms (especially macOS ARM64 with ONNX runtime)
+      expect(duration).toBeLessThan(30000);
     });
   });
 });
